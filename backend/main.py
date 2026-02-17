@@ -1,10 +1,14 @@
 """ZFS Manager — FastAPI backend entry point."""
 
+import logging
 import shutil
+import sys
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from exceptions import ZFSError
 from models import LoginRequest
@@ -13,6 +17,8 @@ from middleware.auth import login, logout, get_current_user
 from routes import pools, datasets, snapshots, replication, system
 from ws import router as ws_router
 from db import close_db
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ZFS Manager",
@@ -52,6 +58,28 @@ async def validation_error_handler(request: Request, exc: ValidationError) -> JS
 
 
 # --- Lifecycle ---
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    """Verify ZFS tools are available at startup."""
+    zfs_path = shutil.which("zfs")
+    zpool_path = shutil.which("zpool")
+
+    if not zfs_path or not zpool_path:
+        missing = []
+        if not zfs_path:
+            missing.append("zfs")
+        if not zpool_path:
+            missing.append("zpool")
+        logger.critical(
+            "Required commands not found: %s. "
+            "Install ZFS: apt install zfsutils-linux",
+            ", ".join(missing),
+        )
+        sys.exit(1)
+
+    logger.info("ZFS tools found: zfs=%s, zpool=%s", zfs_path, zpool_path)
 
 
 @app.on_event("shutdown")
@@ -102,3 +130,11 @@ async def health() -> dict:
         "zfs": zfs_available,
         "zpool": zpool_available,
     }
+
+
+# --- Serve frontend static files (production) ---
+# Must be mounted AFTER all API routes so /api/* takes priority.
+
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="frontend")

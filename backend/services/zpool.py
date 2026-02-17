@@ -452,11 +452,15 @@ async def iostat_stream(pool: str, interval: int = 1) -> AsyncGenerator[dict[str
     validate_pool_name(pool)
     from services.cmd import _zfs_semaphore
     async with _zfs_semaphore:
-        proc = await asyncio.create_subprocess_exec(
-            "zpool", "iostat", "-Hp", "--", pool, str(interval),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "zpool", "iostat", "-Hp", "--", pool, str(interval),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            logger.error("zpool command not found — is ZFS installed?")
+            return
         try:
             assert proc.stdout is not None
             skip_first = True
@@ -486,11 +490,15 @@ async def events_stream() -> AsyncGenerator[str, None]:
     """Stream zpool events as an async generator. For use with WebSocket endpoints."""
     from services.cmd import _zfs_semaphore
     async with _zfs_semaphore:
-        proc = await asyncio.create_subprocess_exec(
-            "zpool", "events", "-f", "-H",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "zpool", "events", "-f", "-H",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            logger.error("zpool command not found — is ZFS installed?")
+            return
         try:
             assert proc.stdout is not None
             async for raw_line in proc.stdout:

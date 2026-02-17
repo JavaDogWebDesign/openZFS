@@ -104,10 +104,15 @@ async def run_cmd(cmd: list[str]) -> tuple[str, str, int]:
     """
     async with _zfs_semaphore:
         logger.debug("Running command: %s", " ".join(cmd))
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            binary = cmd[0] if cmd else "(empty)"
+            logger.error("Command not found: %s", binary)
+            return "", f"{binary}: command not found", 127
         stdout, stderr = await proc.communicate()
         return stdout.decode(), stderr.decode(), proc.returncode
