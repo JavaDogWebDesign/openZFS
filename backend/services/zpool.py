@@ -99,10 +99,10 @@ async def get_iostat(pool: str) -> dict[str, Any]:
             "pool": pool,
             "alloc": fields[1] if len(fields) > 1 else None,
             "free": fields[2] if len(fields) > 2 else None,
-            "read_ops": fields[3] if len(fields) > 3 else None,
-            "write_ops": fields[4] if len(fields) > 4 else None,
-            "read_bw": fields[5] if len(fields) > 5 else None,
-            "write_bw": fields[6] if len(fields) > 6 else None,
+            "read_iops": _to_int(fields[3]) if len(fields) > 3 else 0,
+            "write_iops": _to_int(fields[4]) if len(fields) > 4 else 0,
+            "read_bw": _to_int(fields[5]) if len(fields) > 5 else 0,
+            "write_bw": _to_int(fields[6]) if len(fields) > 6 else 0,
         }
     return {"pool": pool}
 
@@ -444,6 +444,14 @@ async def set_property(pool: str, prop: str, value: str) -> None:
         raise parse_zfs_error(stderr, rc)
 
 
+def _to_int(value: str) -> int:
+    """Safely convert a zpool iostat string value to int."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
+
+
 # --- Streaming (async generators for WebSocket) ---
 
 
@@ -478,10 +486,10 @@ async def iostat_stream(pool: str, interval: int = 1) -> AsyncGenerator[dict[str
                 "pool": pool,
                 "alloc": fields[1] if len(fields) > 1 else None,
                 "free": fields[2] if len(fields) > 2 else None,
-                "read_ops": fields[3] if len(fields) > 3 else None,
-                "write_ops": fields[4] if len(fields) > 4 else None,
-                "read_bw": fields[5] if len(fields) > 5 else None,
-                "write_bw": fields[6] if len(fields) > 6 else None,
+                "read_iops": _to_int(fields[3]) if len(fields) > 3 else 0,
+                "write_iops": _to_int(fields[4]) if len(fields) > 4 else 0,
+                "read_bw": _to_int(fields[5]) if len(fields) > 5 else 0,
+                "write_bw": _to_int(fields[6]) if len(fields) > 6 else 0,
             }
     finally:
         proc.terminate()

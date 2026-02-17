@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import {
   Database,
   Heart,
@@ -47,6 +47,12 @@ function parseCapacity(raw: string): number {
 
 export function Dashboard(): JSX.Element {
   const { data: pools, loading, error, refetch } = useApi(() => listPools());
+
+  /* Auto-refresh pool data every 30s so capacity/health stay current */
+  useEffect(() => {
+    const id = setInterval(refetch, 30_000);
+    return () => clearInterval(id);
+  }, [refetch]);
 
   /* First pool name for IoChart */
   const firstPool = pools?.[0]?.name ?? "";
