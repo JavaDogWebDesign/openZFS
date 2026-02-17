@@ -75,6 +75,7 @@ PACKAGES=(
     npm
     nginx
     rsync               # used by this script to copy files
+    smartmontools       # smartctl for drive health monitoring
 )
 
 info "Installing system packages: ${PACKAGES[*]}"

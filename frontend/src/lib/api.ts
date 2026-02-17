@@ -406,6 +406,46 @@ export function deleteReplicationJob(id: string) {
   return api.del<{ message: string }>(`/api/replication/jobs/${id}`);
 }
 
+// --- Drives ---
+
+export interface SmartHealth {
+  available: boolean;
+  healthy: boolean | null;
+  temperature: number | null;
+  power_on_hours: number | null;
+  model_family: string | null;
+  firmware_version: string | null;
+  rotation_rate: number | null;
+  form_factor: string | null;
+  smart_error_log_count: number | null;
+}
+
+export interface DriveChild {
+  name: string;
+  size: number | null;
+  fstype: string | null;
+  mountpoint: string | null;
+}
+
+export interface DriveInfo {
+  name: string;
+  size: number | null;
+  model: string | null;
+  serial: string | null;
+  vendor: string | null;
+  rev: string | null;
+  type: "HDD" | "SSD" | "NVMe";
+  transport: string | null;
+  rota: boolean | number | null;
+  pool: string | null;
+  children: DriveChild[];
+  smart: SmartHealth;
+}
+
+export function listDrivesDetailed() {
+  return api.get<{ drives: DriveInfo[] }>("/api/system/drives");
+}
+
 // --- System ---
 
 export function getSystemVersion() {

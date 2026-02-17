@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Database,
+  Disc,
   HardDrive,
   Camera,
   RefreshCw,
@@ -15,6 +16,7 @@ import styles from "./Layout.module.css";
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/pools", label: "Pools", icon: Database },
+  { to: "/drives", label: "Drives", icon: Disc },
   { to: "/datasets", label: "Datasets", icon: HardDrive },
   { to: "/snapshots", label: "Snapshots", icon: Camera },
   { to: "/replication", label: "Replication", icon: RefreshCw },

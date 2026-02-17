@@ -1,12 +1,14 @@
 """System information API routes."""
 
 import json
+import re
 import shutil
 
 from fastapi import APIRouter, Depends
 
 from middleware.auth import get_current_user
 from services.cmd import run_cmd
+from services.smart import get_all_smart
 from db import get_audit_log
 
 router = APIRouter()
@@ -36,6 +38,104 @@ async def list_disks(user: dict = Depends(get_current_user)):
         return {"devices": data.get("blockdevices", [])}
     except json.JSONDecodeError:
         return {"error": "Failed to parse lsblk output", "devices": []}
+
+
+@router.get("/drives")
+async def list_drives(user: dict = Depends(get_current_user)):
+    """List physical drives with SMART health and pool membership."""
+    # 1. Get extended lsblk info
+    stdout, stderr, rc = await run_cmd([
+        "lsblk", "-Jbp", "-o",
+        "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,SERIAL,ROTA,TRAN,VENDOR,REV",
+    ])
+    if rc != 0:
+        return {"error": f"lsblk failed: {stderr}", "drives": []}
+
+    try:
+        lsblk_data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return {"error": "Failed to parse lsblk output", "drives": []}
+
+    all_devices = lsblk_data.get("blockdevices", [])
+
+    # Filter to physical disks only
+    disks = [d for d in all_devices if d.get("type") == "disk"]
+
+    # 2. Build pool-device map via zpool status -LP
+    pool_map: dict[str, str] = {}  # device path -> pool name
+    zpool_out, _, zpool_rc = await run_cmd(["zpool", "status", "-LP"])
+    if zpool_rc == 0:
+        current_pool = None
+        for line in zpool_out.splitlines():
+            pool_match = re.match(r"^\s*pool:\s+(\S+)", line)
+            if pool_match:
+                current_pool = pool_match.group(1)
+                continue
+            if current_pool:
+                # Lines with device paths like /dev/sda1 or /dev/disk/by-id/...
+                dev_match = re.match(r"^\s+(/dev/\S+)", line)
+                if dev_match:
+                    dev_path = dev_match.group(1)
+                    pool_map[dev_path] = current_pool
+
+    # 3. Get SMART data for all disks
+    device_names = [d["name"] for d in disks]
+    smart_data = await get_all_smart(device_names)
+
+    # 4. Merge everything
+    drives = []
+    for disk in disks:
+        name = disk["name"]
+        size = disk.get("size")
+        rota = disk.get("rota")
+        tran = (disk.get("tran") or "").upper()
+
+        # Determine drive type
+        if rota is True or rota == "1" or rota == 1:
+            drive_type = "HDD"
+        elif tran == "NVME":
+            drive_type = "NVMe"
+        else:
+            drive_type = "SSD"
+
+        # Check pool membership for this disk and its partitions
+        pool = None
+        children = disk.get("children", [])
+        # Check the disk itself
+        if name in pool_map:
+            pool = pool_map[name]
+        # Check partitions
+        for child in children:
+            child_name = child.get("name", "")
+            if child_name in pool_map and pool is None:
+                pool = pool_map[child_name]
+
+        smart = smart_data.get(name, {"available": False})
+
+        drives.append({
+            "name": name,
+            "size": size,
+            "model": (disk.get("model") or "").strip() or None,
+            "serial": (disk.get("serial") or "").strip() or None,
+            "vendor": (disk.get("vendor") or "").strip() or None,
+            "rev": (disk.get("rev") or "").strip() or None,
+            "type": drive_type,
+            "transport": tran or None,
+            "rota": rota,
+            "pool": pool,
+            "children": [
+                {
+                    "name": c.get("name"),
+                    "size": c.get("size"),
+                    "fstype": c.get("fstype"),
+                    "mountpoint": c.get("mountpoint"),
+                }
+                for c in children
+            ],
+            "smart": smart,
+        })
+
+    return {"drives": drives}
 
 
 @router.get("/arc")

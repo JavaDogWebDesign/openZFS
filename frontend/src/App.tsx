@@ -5,6 +5,7 @@ import { Layout } from "@/components/Layout";
 import { Login } from "@/views/Login";
 import { Dashboard } from "@/views/Dashboard";
 import { Pools } from "@/views/Pools";
+import { Drives } from "@/views/Drives";
 import { Datasets } from "@/views/Datasets";
 import { Snapshots } from "@/views/Snapshots";
 import { Replication } from "@/views/Replication";
@@ -52,6 +53,7 @@ export function App() {
           <Route element={<Layout username={username} onLogout={handleLogout} />}>
             <Route index element={<Dashboard />} />
             <Route path="pools" element={<Pools />} />
+            <Route path="drives" element={<Drives />} />
             <Route path="datasets" element={<Datasets />} />
             <Route path="snapshots" element={<Snapshots />} />
             <Route path="replication" element={<Replication />} />
