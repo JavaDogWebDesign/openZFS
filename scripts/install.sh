@@ -33,10 +33,37 @@ if ! grep -qi debian /etc/os-release 2>/dev/null; then
     err "This installer is designed for Debian. Proceeding anyway..."
 fi
 
-# ── 1. Install system packages ───────────────────────────────────
+# ── 1. Enable contrib repo (ZFS lives in contrib, not main) ──────
+
+info "Ensuring 'contrib' component is enabled in apt sources..."
+SOURCES_LIST="/etc/apt/sources.list"
+SOURCES_DIR="/etc/apt/sources.list.d"
+
+# Debian 12+ uses .sources files in /etc/apt/sources.list.d/
+if ls "${SOURCES_DIR}"/*.sources &>/dev/null; then
+    for src_file in "${SOURCES_DIR}"/*.sources; do
+        if grep -q "^Components:" "$src_file" && ! grep -q "contrib" "$src_file"; then
+            info "Adding 'contrib' to $src_file"
+            sed -i 's/^Components:.*/& contrib/' "$src_file"
+        fi
+    done
+elif [[ -f "$SOURCES_LIST" ]]; then
+    # Traditional sources.list format
+    if ! grep -qE "^deb .+ contrib" "$SOURCES_LIST"; then
+        info "Adding 'contrib' to $SOURCES_LIST"
+        sed -i '/^deb .* main/ s/$/ contrib/' "$SOURCES_LIST"
+    fi
+fi
 
 info "Updating package lists..."
 apt-get update -qq
+
+# Install kernel headers (needed by ZFS DKMS module)
+KERNEL_HEADERS="linux-headers-$(uname -r)"
+if ! dpkg -s "$KERNEL_HEADERS" &>/dev/null; then
+    info "Installing kernel headers: ${KERNEL_HEADERS}"
+    apt-get install -y -qq "$KERNEL_HEADERS"
+fi
 
 PACKAGES=(
     zfsutils-linux      # zfs and zpool commands
@@ -47,6 +74,7 @@ PACKAGES=(
     nodejs
     npm
     nginx
+    rsync               # used by this script to copy files
 )
 
 info "Installing system packages: ${PACKAGES[*]}"
