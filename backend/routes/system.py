@@ -138,6 +138,72 @@ async def list_drives(user: dict = Depends(get_current_user)):
     return {"drives": drives}
 
 
+@router.get("/info")
+async def get_system_info(user: dict = Depends(get_current_user)):
+    """Get comprehensive system information."""
+    import platform
+    import os
+
+    info: dict = {}
+
+    # Hostname and kernel
+    info["hostname"] = platform.node()
+    info["kernel"] = platform.release()
+    info["arch"] = platform.machine()
+
+    # OS pretty name from /etc/os-release
+    info["os"] = "Linux"
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("PRETTY_NAME="):
+                    info["os"] = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except FileNotFoundError:
+        pass
+
+    # Uptime from /proc/uptime
+    info["uptime_seconds"] = 0
+    try:
+        with open("/proc/uptime") as f:
+            info["uptime_seconds"] = int(float(f.read().split()[0]))
+    except (FileNotFoundError, ValueError, IndexError):
+        pass
+
+    # CPU info from /proc/cpuinfo
+    info["cpu_model"] = "Unknown"
+    info["cpu_cores"] = os.cpu_count() or 0
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    info["cpu_model"] = line.split(":", 1)[1].strip()
+                    break
+    except FileNotFoundError:
+        pass
+
+    # Memory from /proc/meminfo
+    info["memory_total"] = 0
+    info["memory_available"] = 0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    info["memory_total"] = int(line.split()[1]) * 1024  # kB to bytes
+                elif line.startswith("MemAvailable:"):
+                    info["memory_available"] = int(line.split()[1]) * 1024
+    except (FileNotFoundError, ValueError, IndexError):
+        pass
+
+    # ZFS versions
+    zfs_out, _, _ = await run_cmd(["zfs", "version"])
+    zpool_out, _, _ = await run_cmd(["zpool", "version"])
+    info["zfs_version"] = zfs_out.strip()
+    info["zpool_version"] = zpool_out.strip()
+
+    return info
+
+
 @router.get("/arc")
 async def get_arc_stats(user: dict = Depends(get_current_user)):
     """Get ARC statistics from /proc/spl/kstat/zfs/arcstats."""
@@ -148,10 +214,14 @@ async def get_arc_stats(user: dict = Depends(get_current_user)):
         return {"error": "ARC stats not available (not running on Linux with ZFS)"}
 
     stats = {}
-    for line in raw.strip().split("\n"):
+    lines = raw.strip().split("\n")
+    for line in lines[2:]:
         parts = line.split()
-        if len(parts) >= 3 and parts[1].isdigit():
-            stats[parts[0]] = int(parts[2])
+        if len(parts) >= 3:
+            try:
+                stats[parts[0]] = int(parts[2])
+            except ValueError:
+                continue
 
     size = stats.get("size", 0)
     max_size = stats.get("c_max", 0)

@@ -1,8 +1,11 @@
 """ZFS Manager — FastAPI backend entry point."""
 
+import asyncio
 import logging
 import shutil
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, Request, Response
@@ -16,7 +19,8 @@ from services.cmd import ValidationError
 from middleware.auth import login, logout, get_current_user
 from routes import pools, datasets, snapshots, replication, system
 from ws import router as ws_router
-from db import close_db
+from db import close_db, list_scrub_schedules, update_scrub_schedule
+from services import zpool
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +64,62 @@ async def validation_error_handler(request: Request, exc: ValidationError) -> JS
 # --- Lifecycle ---
 
 
+async def scrub_scheduler() -> None:
+    """Background task that checks enabled scrub schedules every 60s."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+            schedules = await list_scrub_schedules()
+            now = datetime.now()
+
+            for sched in schedules:
+                if not sched.get("enabled"):
+                    continue
+
+                should_run = False
+                freq = sched["frequency"]
+
+                if freq == "daily":
+                    should_run = now.hour == sched["hour"] and now.minute == sched["minute"]
+                elif freq == "weekly":
+                    should_run = (
+                        now.weekday() == sched["day_of_week"]
+                        and now.hour == sched["hour"]
+                        and now.minute == sched["minute"]
+                    )
+                elif freq == "monthly":
+                    should_run = (
+                        now.day == sched["day_of_month"]
+                        and now.hour == sched["hour"]
+                        and now.minute == sched["minute"]
+                    )
+
+                if not should_run:
+                    continue
+
+                # Dedup: skip if already ran this minute
+                last_run = sched.get("last_run")
+                if last_run and (time.time() - last_run) < 120:
+                    continue
+
+                pool_name = sched["pool"]
+                logger.info("Scrub scheduler: starting scrub on %s", pool_name)
+                try:
+                    await zpool.scrub(pool_name, action="start")
+                    await update_scrub_schedule(
+                        sched["id"], last_run=time.time(), last_status="started"
+                    )
+                except Exception as e:
+                    logger.error("Scrub scheduler: failed to scrub %s: %s", pool_name, e)
+                    await update_scrub_schedule(
+                        sched["id"], last_run=time.time(), last_status=f"error: {e}"
+                    )
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("Scrub scheduler: unexpected error")
+
+
 @app.on_event("startup")
 async def startup() -> None:
     """Verify ZFS tools are available at startup."""
@@ -80,6 +140,9 @@ async def startup() -> None:
         sys.exit(1)
 
     logger.info("ZFS tools found: zfs=%s, zpool=%s", zfs_path, zpool_path)
+
+    # Start background scrub scheduler
+    asyncio.create_task(scrub_scheduler())
 
 
 @app.on_event("shutdown")

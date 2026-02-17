@@ -1,4 +1,4 @@
-import { getSystemVersion, getArcStats, getAuditLog } from "@/lib/api";
+import { getSystemVersion, getSystemInfo, getArcStats, getAuditLog } from "@/lib/api";
 import { useApi } from "@/hooks/useApi";
 import {
   Server,
@@ -8,24 +8,13 @@ import {
   CheckCircle,
   XCircle,
   FileText,
+  Cpu,
+  MemoryStick,
+  Clock,
+  Monitor,
 } from "lucide-react";
 import s from "@/styles/views.module.css";
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
-}
-
-function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatTimestamp(ts: number): string {
-  return new Date(ts * 1000).toLocaleString();
-}
+import { formatBytes, formatPercent, formatDuration, formatTimestamp } from "@/lib/format";
 
 export function Settings() {
   const {
@@ -34,6 +23,13 @@ export function Settings() {
     error: versionError,
     refetch: refetchVersion,
   } = useApi(() => getSystemVersion(), []);
+
+  const {
+    data: sysInfo,
+    loading: sysInfoLoading,
+    error: sysInfoError,
+    refetch: refetchSysInfo,
+  } = useApi(() => getSystemInfo(), []);
 
   const {
     data: arc,
@@ -51,6 +47,7 @@ export function Settings() {
 
   const handleRefreshAll = () => {
     refetchVersion();
+    refetchSysInfo();
     refetchArc();
     refetchAudit();
   };
@@ -74,24 +71,79 @@ export function Settings() {
             style={{ marginRight: "var(--space-2)", verticalAlign: "middle" }}
           />
           Server Information
+          <button
+            className={s.btnGhost}
+            onClick={refetchSysInfo}
+            style={{ marginLeft: "auto", float: "right" }}
+          >
+            <RefreshCw size={12} />
+          </button>
         </h2>
 
-        {versionLoading ? (
-          <div className={s.loading}>Loading version info...</div>
-        ) : versionError ? (
-          <div className={s.error}>{versionError}</div>
-        ) : version ? (
-          <div className={s.grid2}>
-            <div className={s.stat}>
-              <div className={s.statLabel}>ZFS Version</div>
-              <div className={s.statValue}>{version.zfs_version}</div>
-            </div>
-            <div className={s.stat}>
-              <div className={s.statLabel}>Zpool Version</div>
-              <div className={s.statValue}>{version.zpool_version}</div>
-            </div>
+        {sysInfoLoading || versionLoading ? (
+          <div className={s.loading}>Loading system info...</div>
+        ) : sysInfoError || versionError ? (
+          <div className={s.error}>{sysInfoError || versionError}</div>
+        ) : (
+          <div className={s.grid3}>
+            {sysInfo && (
+              <>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>
+                    <Monitor size={12} /> Hostname
+                  </div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>{sysInfo.hostname}</div>
+                </div>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>OS</div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>{sysInfo.os}</div>
+                </div>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>Kernel</div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>{sysInfo.kernel}</div>
+                </div>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>
+                    <Clock size={12} /> Uptime
+                  </div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>{formatDuration(sysInfo.uptime_seconds)}</div>
+                </div>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>
+                    <Cpu size={12} /> CPU
+                  </div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>{sysInfo.cpu_model}</div>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                    {sysInfo.cpu_cores} cores
+                  </div>
+                </div>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>
+                    <MemoryStick size={12} /> Memory
+                  </div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>
+                    {formatBytes(sysInfo.memory_available)} free
+                  </div>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                    {formatBytes(sysInfo.memory_total)} total
+                  </div>
+                </div>
+              </>
+            )}
+            {version && (
+              <>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>ZFS Version</div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>{version.zfs_version}</div>
+                </div>
+                <div className={s.stat}>
+                  <div className={s.statLabel}>Zpool Version</div>
+                  <div className={s.statValue} style={{ fontSize: "var(--text-base)" }}>{version.zpool_version}</div>
+                </div>
+              </>
+            )}
           </div>
-        ) : null}
+        )}
       </div>
 
       {/* ARC Statistics */}
@@ -136,9 +188,9 @@ export function Settings() {
                   <span
                     style={{
                       color:
-                        arc.hit_rate > 0.9
+                        arc.hit_rate > 90
                           ? "var(--color-success)"
-                          : arc.hit_rate > 0.7
+                          : arc.hit_rate > 70
                             ? "var(--color-warning)"
                             : "var(--color-danger)",
                     }}
@@ -169,7 +221,7 @@ export function Settings() {
                 <span>ARC Utilization</span>
                 <span>
                   {formatBytes(arc.size)} / {formatBytes(arc.max_size)} (
-                  {formatPercent(arc.max_size > 0 ? arc.size / arc.max_size : 0)}
+                  {formatPercent(arc.max_size > 0 ? (arc.size / arc.max_size) * 100 : 0)}
                   )
                 </span>
               </div>
@@ -206,7 +258,7 @@ export function Settings() {
                   }}
                 >
                   {arc.size > 0
-                    ? formatPercent(arc.mru_size / arc.size)
+                    ? formatPercent((arc.mru_size / arc.size) * 100)
                     : "0%"}{" "}
                   of ARC
                 </div>
@@ -222,7 +274,7 @@ export function Settings() {
                   }}
                 >
                   {arc.size > 0
-                    ? formatPercent(arc.mfu_size / arc.size)
+                    ? formatPercent((arc.mfu_size / arc.size) * 100)
                     : "0%"}{" "}
                   of ARC
                 </div>
@@ -241,7 +293,7 @@ export function Settings() {
                         marginTop: "var(--space-1)",
                       }}
                     >
-                      Hit rate: {formatPercent(arc.l2_hit_rate)}
+                      Hit rate: {formatPercent(arc.l2_hit_rate ?? 0)}
                     </div>
                   )}
                 </div>

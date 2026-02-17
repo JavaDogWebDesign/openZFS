@@ -25,6 +25,7 @@ import {
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useToast } from "@/components/Toast";
 import styles from "@/styles/views.module.css";
 
 interface DiffEntry {
@@ -93,6 +94,8 @@ export function Snapshots() {
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
 
+  const { addToast } = useToast();
+
   // --- Data fetching ---
 
   const {
@@ -156,6 +159,7 @@ export function Snapshots() {
         createRecursive,
       );
       if (result) {
+        addToast("success", `Snapshot ${createName} created`);
         setCreateName("");
         setCreateRecursive(false);
         setShowCreateForm(false);
@@ -169,19 +173,21 @@ export function Snapshots() {
     if (!destroyTarget) return;
     const result = await destroyMut.execute(destroyTarget);
     if (result) {
+      addToast("success", "Snapshot destroyed");
       setDestroyTarget(null);
       refetchSnapshots();
     }
-  }, [destroyTarget, destroyMut, refetchSnapshots]);
+  }, [destroyTarget, destroyMut, refetchSnapshots, addToast]);
 
   const handleRollback = useCallback(async () => {
     if (!rollbackTarget) return;
     const result = await rollbackMut.execute(rollbackTarget);
     if (result) {
+      addToast("success", "Rollback complete");
       setRollbackTarget(null);
       refetchSnapshots();
     }
-  }, [rollbackTarget, rollbackMut, refetchSnapshots]);
+  }, [rollbackTarget, rollbackMut, refetchSnapshots, addToast]);
 
   const handleClone = useCallback(async () => {
     if (!cloneSource || !cloneTarget) return;

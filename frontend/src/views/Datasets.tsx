@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useToast } from "@/components/Toast";
 import styles from "@/styles/views.module.css";
 
 interface DatasetProperties {
@@ -140,6 +141,8 @@ export function Datasets() {
     (name: string, protocol: "nfs" | "smb") => shareDataset(name, protocol),
   );
 
+  const { addToast } = useToast();
+
   // --- Derived ---
 
   const selectedSummary = useMemo(
@@ -164,6 +167,7 @@ export function Datasets() {
       if (!createForm.name) return;
       const result = await createMut.execute(createForm);
       if (result) {
+        addToast("success", `Dataset ${createForm.name} created`);
         setShowCreateModal(false);
         setCreateForm(EMPTY_CREATE_FORM);
         refetchDatasets();
@@ -176,13 +180,14 @@ export function Datasets() {
     if (!destroyTarget) return;
     const result = await destroyMut.execute(destroyTarget);
     if (result) {
+      addToast("success", `Dataset ${destroyTarget} destroyed`);
       setDestroyTarget(null);
       if (selectedDataset === destroyTarget) {
         setSelectedDataset(null);
       }
       refetchDatasets();
     }
-  }, [destroyTarget, destroyMut, selectedDataset, refetchDatasets]);
+  }, [destroyTarget, destroyMut, selectedDataset, refetchDatasets, addToast]);
 
   const handleMount = useCallback(async () => {
     if (!selectedDataset) return;

@@ -12,13 +12,20 @@ import { Activity, Wifi, WifiOff } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import styles from "./IoChart.module.css";
 
-/* ── Constants ──────────────────────────────────────────── */
+/* -- Constants -------------------------------------------------- */
 
-const MAX_POINTS = 60;
+const TIME_RANGES = [
+  { label: "1m", seconds: 60 },
+  { label: "5m", seconds: 300 },
+  { label: "15m", seconds: 900 },
+  { label: "30m", seconds: 1800 },
+  { label: "1h", seconds: 3600 },
+] as const;
+
 const READ_COLOR = "#5b9cf5"; // accent blue
 const WRITE_COLOR = "#c084fc"; // purple
 
-/* ── Types ──────────────────────────────────────────────── */
+/* -- Types ------------------------------------------------------ */
 
 interface IoStatMessage {
   read_iops: number;
@@ -38,9 +45,11 @@ interface DataPoint {
 
 interface IoChartProps {
   pool: string;
+  pools?: string[];
+  onPoolChange?: (pool: string) => void;
 }
 
-/* ── Helpers ────────────────────────────────────────────── */
+/* -- Helpers ---------------------------------------------------- */
 
 function formatIops(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -71,7 +80,7 @@ function formatAxisBw(bytes: number): string {
   return `${Math.round(bytes)}`;
 }
 
-/* ── Custom Tooltip ─────────────────────────────────────── */
+/* -- Custom Tooltip --------------------------------------------- */
 
 interface TooltipPayloadEntry {
   dataKey: string;
@@ -106,11 +115,14 @@ function ChartTooltip({ active, payload, label, formatter }: CustomTooltipProps)
   );
 }
 
-/* ── Main Component ─────────────────────────────────────── */
+/* -- Main Component --------------------------------------------- */
 
-export function IoChart({ pool }: IoChartProps) {
+export function IoChart({ pool, pools, onPoolChange }: IoChartProps) {
   const [history, setHistory] = useState<DataPoint[]>([]);
   const historyRef = useRef<DataPoint[]>([]);
+  const [timeRangeIdx, setTimeRangeIdx] = useState(0); // default 1m
+
+  const maxPoints = TIME_RANGES[timeRangeIdx].seconds;
 
   const { data, isConnected, error } = useWebSocket<IoStatMessage>({
     url: `/api/ws/iostat?pool=${encodeURIComponent(pool)}`,
@@ -127,7 +139,8 @@ export function IoChart({ pool }: IoChartProps) {
       writeBw: msg.write_bw,
     };
 
-    const next = [...historyRef.current, point].slice(-MAX_POINTS);
+    // Keep the full history (up to 1h) and slice for display
+    const next = [...historyRef.current, point].slice(-3600);
     historyRef.current = next;
     setHistory(next);
   }, []);
@@ -144,8 +157,11 @@ export function IoChart({ pool }: IoChartProps) {
     setHistory([]);
   }, [pool]);
 
+  /* Slice displayed data based on time range */
+  const displayData = history.slice(-maxPoints);
+
   /* Derive current values from the latest data point */
-  const latest = history.length > 0 ? history[history.length - 1] : null;
+  const latest = displayData.length > 0 ? displayData[displayData.length - 1] : null;
 
   /* Connection status display */
   const connectionStatus = error
@@ -188,15 +204,45 @@ export function IoChart({ pool }: IoChartProps) {
 
   return (
     <div className={styles.container}>
-      {/* ── Status bar ─────────────────────────────────── */}
-      <div className={styles.statusBar}>
-        <StatusIcon size={14} />
-        <span className={`${styles.statusDot} ${statusDotClass}`} />
-        <span className={styles.statusLabel}>{statusText}</span>
-        {error && <span className={styles.errorText}>{error}</span>}
+      {/* -- Control bar with status, time range, and pool selector -- */}
+      <div className={styles.controlBar}>
+        <div className={styles.statusBar}>
+          <StatusIcon size={14} />
+          <span className={`${styles.statusDot} ${statusDotClass}`} />
+          <span className={styles.statusLabel}>{statusText}</span>
+          {error && <span className={styles.errorText}>{error}</span>}
+        </div>
+
+        <div className={styles.controlBarRight}>
+          {/* Pool selector */}
+          {pools && pools.length > 1 && onPoolChange && (
+            <select
+              className={styles.poolSelect}
+              value={pool}
+              onChange={(e) => onPoolChange(e.target.value)}
+            >
+              {pools.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Time range selector */}
+          <div className={styles.timeRangeGroup}>
+            {TIME_RANGES.map((range, idx) => (
+              <button
+                key={range.label}
+                className={`${styles.timeRangeBtn} ${idx === timeRangeIdx ? styles.timeRangeBtnActive : ""}`}
+                onClick={() => setTimeRangeIdx(idx)}
+              >
+                {range.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* ── Stat cards ─────────────────────────────────── */}
+      {/* -- Stat cards -------------------------------------------- */}
       <div className={styles.statsRow}>
         <div className={styles.statCard}>
           <span className={styles.statLabel}>
@@ -248,7 +294,7 @@ export function IoChart({ pool }: IoChartProps) {
         </div>
       </div>
 
-      {/* ── Charts ─────────────────────────────────────── */}
+      {/* -- Charts ------------------------------------------------ */}
       <div className={styles.chartsRow}>
         {/* IOPS chart */}
         <div className={styles.chartPanel}>
@@ -257,11 +303,11 @@ export function IoChart({ pool }: IoChartProps) {
             IOPS Over Time
           </div>
           <div className={styles.chartWrapper}>
-            {history.length === 0 ? (
+            {displayData.length === 0 ? (
               <div className={styles.emptyState}>Waiting for data...</div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={history}>
+                <AreaChart data={displayData}>
                   <defs>
                     <linearGradient id="gradReadIops" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={READ_COLOR} stopOpacity={0.3} />
@@ -321,11 +367,11 @@ export function IoChart({ pool }: IoChartProps) {
             Bandwidth Over Time
           </div>
           <div className={styles.chartWrapper}>
-            {history.length === 0 ? (
+            {displayData.length === 0 ? (
               <div className={styles.emptyState}>Waiting for data...</div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={history}>
+                <AreaChart data={displayData}>
                   <defs>
                     <linearGradient id="gradReadBw" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={READ_COLOR} stopOpacity={0.3} />

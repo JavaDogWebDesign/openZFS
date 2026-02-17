@@ -253,3 +253,24 @@ class ArcStats(BaseModel):
     mfu_size: int
     l2_size: int | None = None
     l2_hit_rate: float | None = None
+
+
+# --- Scrub Scheduling ---
+
+
+class ScrubScheduleCreate(BaseModel):
+    pool: str
+    frequency: str = Field("weekly", pattern="^(daily|weekly|monthly)$")
+    day_of_week: int = Field(0, ge=0, le=6, description="0=Mon, 6=Sun")
+    day_of_month: int = Field(1, ge=1, le=28)
+    hour: int = Field(2, ge=0, le=23)
+    minute: int = Field(0, ge=0, le=59)
+
+
+class ScrubScheduleUpdate(BaseModel):
+    frequency: str | None = Field(None, pattern="^(daily|weekly|monthly)$")
+    day_of_week: int | None = Field(None, ge=0, le=6)
+    day_of_month: int | None = Field(None, ge=1, le=28)
+    hour: int | None = Field(None, ge=0, le=23)
+    minute: int | None = Field(None, ge=0, le=59)
+    enabled: bool | None = None

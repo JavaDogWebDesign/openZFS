@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Database,
   Heart,
@@ -48,14 +48,9 @@ function parseCapacity(raw: string): number {
 export function Dashboard(): JSX.Element {
   const { data: pools, loading, error, refetch } = useApi(() => listPools());
 
-  /* Auto-refresh pool data every 30s so capacity/health stay current */
-  useEffect(() => {
-    const id = setInterval(refetch, 30_000);
-    return () => clearInterval(id);
-  }, [refetch]);
-
-  /* First pool name for IoChart */
-  const firstPool = pools?.[0]?.name ?? "";
+  /* Selected pool for IoChart (defaults to first pool) */
+  const [selectedPool, setSelectedPool] = useState<string>("");
+  const activePool = selectedPool || pools?.[0]?.name || "";
 
   /* WebSocket: ZFS event feed */
   const events = useWebSocket<ZfsEvent>({
@@ -143,39 +138,42 @@ export function Dashboard(): JSX.Element {
         </div>
       </div>
 
-      {/* Pool health list + I/O Activity side by side */}
-      <div className={css.grid2} style={{ marginTop: "var(--space-6)" }}>
-        {/* Pool health list */}
-        <div className={css.card}>
-          <h2 className={css.cardTitle}>Pool Health</h2>
-          {!pools || pools.length === 0 ? (
-            <div className={css.empty}>No pools found.</div>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {pools.map((pool: PoolSummary) => (
-                <li
-                  key={pool.name}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "var(--space-2) 0",
-                    borderBottom: "1px solid var(--color-border)",
-                  }}
-                >
-                  <span className={css.mono}>{pool.name}</span>
-                  <span className={healthBadge(pool.health)}>
-                    {pool.health}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      {/* Compact Pool Health strip */}
+      <div className={css.card} style={{ marginTop: "var(--space-4)" }}>
+        <h2 className={css.cardTitle} style={{ marginBottom: "var(--space-2)" }}>Pool Health</h2>
+        {!pools || pools.length === 0 ? (
+          <div className={css.empty}>No pools found.</div>
+        ) : (
+          <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
+            {pools.map((pool: PoolSummary) => (
+              <div
+                key={pool.name}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "var(--space-2)",
+                  padding: "var(--space-1) var(--space-3)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: "var(--radius-md)",
+                  background: "var(--color-bg-surface)",
+                }}
+              >
+                <span className={css.mono} style={{ fontSize: "var(--text-sm)" }}>{pool.name}</span>
+                <span className={healthBadge(pool.health)}>{pool.health}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-        {/* I/O Activity Chart */}
-        {firstPool ? (
-          <IoChart pool={firstPool} />
+      {/* Full-width I/O Activity Chart */}
+      <div style={{ marginTop: "var(--space-4)" }}>
+        {activePool ? (
+          <IoChart
+            pool={activePool}
+            pools={pools?.map((p) => p.name)}
+            onPoolChange={setSelectedPool}
+          />
         ) : (
           <div className={css.card}>
             <h2 className={css.cardTitle}>I/O Activity</h2>
@@ -185,7 +183,7 @@ export function Dashboard(): JSX.Element {
       </div>
 
       {/* Recent Events */}
-      <div className={css.card} style={{ marginTop: "var(--space-6)" }}>
+      <div className={css.card} style={{ marginTop: "var(--space-4)" }}>
         <h2 className={css.cardTitle}>
           <Bell size={14} /> Recent Events
           {events.isConnected && (

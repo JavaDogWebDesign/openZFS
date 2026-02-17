@@ -10,10 +10,19 @@ from models import (
     PoolDestroyRequest,
     ReplaceRequest,
     ScrubRequest,
+    ScrubScheduleCreate,
+    ScrubScheduleUpdate,
     TrimRequest,
 )
 from services import zpool
-from db import audit_log
+from db import (
+    audit_log,
+    create_scrub_schedule,
+    list_scrub_schedules as db_list_scrub_schedules,
+    get_scrub_schedule,
+    update_scrub_schedule,
+    delete_scrub_schedule as db_delete_scrub_schedule,
+)
 
 router = APIRouter()
 
@@ -22,6 +31,59 @@ router = APIRouter()
 async def list_pools(user: dict = Depends(get_current_user)):
     """List all ZFS pools."""
     return await zpool.list_pools()
+
+
+# --- Scrub schedules (registered BEFORE /{pool} catch-all) ---
+
+
+@router.get("/scrub-schedules")
+async def list_scrub_schedules(user: dict = Depends(get_current_user)):
+    """List all scrub schedules."""
+    return await db_list_scrub_schedules()
+
+
+@router.post("/scrub-schedules")
+async def create_schedule(body: ScrubScheduleCreate, user: dict = Depends(get_current_user)):
+    """Create a scrub schedule."""
+    schedule_id = await create_scrub_schedule(
+        pool=body.pool,
+        frequency=body.frequency,
+        day_of_week=body.day_of_week,
+        day_of_month=body.day_of_month,
+        hour=body.hour,
+        minute=body.minute,
+    )
+    await audit_log(user["username"], "scrub.schedule.create", body.pool)
+    return {"id": schedule_id, "message": f"Scrub schedule created for {body.pool}"}
+
+
+@router.put("/scrub-schedules/{schedule_id}")
+async def update_schedule(
+    schedule_id: str,
+    body: ScrubScheduleUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Update a scrub schedule."""
+    existing = await get_scrub_schedule(schedule_id)
+    if not existing:
+        return {"error": "Schedule not found"}
+    updates = body.model_dump(exclude_none=True)
+    if "enabled" in updates:
+        updates["enabled"] = int(updates["enabled"])
+    await update_scrub_schedule(schedule_id, **updates)
+    await audit_log(user["username"], "scrub.schedule.update", existing["pool"])
+    return {"message": "Schedule updated"}
+
+
+@router.delete("/scrub-schedules/{schedule_id}")
+async def delete_schedule(schedule_id: str, user: dict = Depends(get_current_user)):
+    """Delete a scrub schedule."""
+    existing = await get_scrub_schedule(schedule_id)
+    if not existing:
+        return {"error": "Schedule not found"}
+    await db_delete_scrub_schedule(schedule_id)
+    await audit_log(user["username"], "scrub.schedule.delete", existing["pool"])
+    return {"message": "Schedule deleted"}
 
 
 @router.get("/{pool}")

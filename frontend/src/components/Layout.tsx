@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -8,9 +9,11 @@ import {
   RefreshCw,
   Share2,
   Settings,
+  Bell,
 } from "lucide-react";
 import clsx from "clsx";
 import { logout } from "@/lib/api";
+import { ActivityPanel } from "./ActivityPanel";
 import styles from "./Layout.module.css";
 
 const NAV_ITEMS = [
@@ -31,6 +34,7 @@ interface LayoutProps {
 
 export function Layout({ username, onLogout }: LayoutProps) {
   const navigate = useNavigate();
+  const [activityOpen, setActivityOpen] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -66,6 +70,16 @@ export function Layout({ username, onLogout }: LayoutProps) {
           ))}
         </nav>
 
+        <div className={styles.bellSection}>
+          <button
+            className={styles.bellBtn}
+            onClick={() => setActivityOpen(true)}
+            title="Activity"
+          >
+            <Bell size={18} />
+          </button>
+        </div>
+
         <div className={styles.userSection}>
           <span className={styles.username}>{username}</span>
           <button className={styles.logoutBtn} onClick={handleLogout}>
@@ -77,6 +91,11 @@ export function Layout({ username, onLogout }: LayoutProps) {
       <main className={styles.main}>
         <Outlet />
       </main>
+
+      <ActivityPanel
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+      />
     </div>
   );
 }

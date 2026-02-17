@@ -7,6 +7,7 @@ import {
   type DatasetSummary,
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
+import { useToast } from "@/components/Toast";
 import {
   Share2,
   Lock,
@@ -15,6 +16,7 @@ import {
   RefreshCw,
   FolderOpen,
   Shield,
+  Eye,
 } from "lucide-react";
 import s from "@/styles/views.module.css";
 
@@ -33,19 +35,69 @@ interface EncryptionInfo {
   keylocation: string;
 }
 
+/* ---------- NFS/SMB option builders ---------- */
+
+interface NfsOptions {
+  hosts: string;
+  permissions: "rw" | "ro";
+  noRootSquash: boolean;
+  sync: boolean;
+  noSubtreeCheck: boolean;
+}
+
+interface SmbOptions {
+  guestOk: boolean;
+  readOnly: boolean;
+  browseable: boolean;
+}
+
+const DEFAULT_NFS: NfsOptions = {
+  hosts: "*",
+  permissions: "rw",
+  noRootSquash: false,
+  sync: true,
+  noSubtreeCheck: true,
+};
+
+const DEFAULT_SMB: SmbOptions = {
+  guestOk: false,
+  readOnly: false,
+  browseable: true,
+};
+
+function buildNfsOptions(opts: NfsOptions): string {
+  const parts: string[] = [opts.permissions];
+  if (opts.noRootSquash) parts.push("no_root_squash");
+  if (opts.sync) parts.push("sync");
+  else parts.push("async");
+  if (opts.noSubtreeCheck) parts.push("no_subtree_check");
+  return `${opts.hosts}(${parts.join(",")})`;
+}
+
+function buildSmbOptions(opts: SmbOptions): string {
+  const parts: string[] = [];
+  if (opts.guestOk) parts.push("guest_ok=yes");
+  if (opts.readOnly) parts.push("read only=yes");
+  if (opts.browseable) parts.push("browseable=yes");
+  else parts.push("browseable=no");
+  return parts.length > 0 ? parts.join(",") : "on";
+}
+
 export function Sharing() {
   const [shareDetails, setShareDetails] = useState<ShareInfo[]>([]);
-  const [encryptionDetails, setEncryptionDetails] = useState<EncryptionInfo[]>(
-    [],
-  );
+  const [encryptionDetails, setEncryptionDetails] = useState<EncryptionInfo[]>([]);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
-  const [shareProtocol, setShareProtocol] = useState<
-    Record<string, "nfs" | "smb">
-  >({});
-  const [shareOptions, setShareOptions] = useState<Record<string, string>>({});
   const [newKeyDataset, setNewKeyDataset] = useState("");
   const [newKeyValue, setNewKeyValue] = useState("");
+
+  // New share form — controlled state
+  const [newShareDataset, setNewShareDataset] = useState("");
+  const [newShareProtocol, setNewShareProtocol] = useState<"nfs" | "smb">("nfs");
+  const [nfsOpts, setNfsOpts] = useState<NfsOptions>({ ...DEFAULT_NFS });
+  const [smbOpts, setSmbOpts] = useState<SmbOptions>({ ...DEFAULT_SMB });
+
+  const { addToast } = useToast();
 
   const {
     data: datasets,
@@ -136,19 +188,31 @@ export function Sharing() {
     [datasets],
   );
 
-  const handleShare = async (name: string) => {
-    const protocol = shareProtocol[name] ?? "nfs";
-    const options = shareOptions[name] ?? "";
-    const result = await shareMutation.execute(name, protocol, options);
+  const handleShare = async () => {
+    if (!newShareDataset) return;
+    const options =
+      newShareProtocol === "nfs"
+        ? buildNfsOptions(nfsOpts)
+        : buildSmbOptions(smbOpts);
+    const result = await shareMutation.execute(newShareDataset, newShareProtocol, options);
     if (result) {
+      addToast("success", `Shared ${newShareDataset} via ${newShareProtocol.toUpperCase()}`);
+      setNewShareDataset("");
+      setNfsOpts({ ...DEFAULT_NFS });
+      setSmbOpts({ ...DEFAULT_SMB });
       loadDetails();
+    } else if (shareMutation.error) {
+      addToast("error", shareMutation.error);
     }
   };
 
   const handleUnshare = async (name: string) => {
     const result = await unshareMutation.execute(name);
     if (result) {
+      addToast("success", `Unshared ${name}`);
       loadDetails();
+    } else if (unshareMutation.error) {
+      addToast("error", unshareMutation.error);
     }
   };
 
@@ -156,6 +220,12 @@ export function Sharing() {
     refetchDatasets();
     loadDetails();
   };
+
+  // Computed preview string
+  const previewOptions =
+    newShareProtocol === "nfs"
+      ? buildNfsOptions(nfsOpts)
+      : buildSmbOptions(smbOpts);
 
   if (datasetsLoading) {
     return <div className={s.loading}>Loading sharing and encryption data...</div>;
@@ -174,12 +244,6 @@ export function Sharing() {
 
       {datasetsError && <div className={s.error}>{datasetsError}</div>}
       {detailsError && <div className={s.error}>{detailsError}</div>}
-      {shareMutation.error && (
-        <div className={s.error}>{shareMutation.error}</div>
-      )}
-      {unshareMutation.error && (
-        <div className={s.error}>{unshareMutation.error}</div>
-      )}
 
       {/* NFS/SMB Sharing Section */}
       <div className={s.card}>
@@ -296,28 +360,29 @@ export function Sharing() {
           >
             Share a Dataset
           </h3>
+
+          {shareMutation.error && (
+            <div className={s.error} style={{ marginBottom: "var(--space-3)" }}>{shareMutation.error}</div>
+          )}
+
+          {/* Row 1: Dataset + Protocol */}
           <div
             style={{
               display: "flex",
               gap: "var(--space-3)",
-              alignItems: "flex-end",
+              marginBottom: "var(--space-3)",
               flexWrap: "wrap",
             }}
           >
-            <div>
+            <div style={{ flex: "1 1 250px" }}>
               <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
                 Dataset
               </label>
               <select
                 className={s.select}
-                id="share-dataset-select"
-                defaultValue=""
-                onChange={(e) => {
-                  const name = e.target.value;
-                  if (name && !shareProtocol[name]) {
-                    setShareProtocol((prev) => ({ ...prev, [name]: "nfs" }));
-                  }
-                }}
+                style={{ width: "100%" }}
+                value={newShareDataset}
+                onChange={(e) => setNewShareDataset(e.target.value)}
               >
                 <option value="">Select dataset...</option>
                 {datasets
@@ -332,65 +397,162 @@ export function Sharing() {
                   ))}
               </select>
             </div>
-            <div>
+            <div style={{ flex: "0 0 120px" }}>
               <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
                 Protocol
               </label>
               <select
                 className={s.select}
-                onChange={(e) => {
-                  const el = document.getElementById(
-                    "share-dataset-select",
-                  ) as HTMLSelectElement | null;
-                  const dsName = el?.value;
-                  if (dsName) {
-                    setShareProtocol((prev) => ({
-                      ...prev,
-                      [dsName]: e.target.value as "nfs" | "smb",
-                    }));
-                  }
-                }}
+                style={{ width: "100%" }}
+                value={newShareProtocol}
+                onChange={(e) => setNewShareProtocol(e.target.value as "nfs" | "smb")}
               >
                 <option value="nfs">NFS</option>
                 <option value="smb">SMB</option>
               </select>
             </div>
-            <div>
-              <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
-                Options
-              </label>
-              <input
-                className={s.select}
-                placeholder="e.g. rw,no_root_squash"
-                onChange={(e) => {
-                  const el = document.getElementById(
-                    "share-dataset-select",
-                  ) as HTMLSelectElement | null;
-                  const dsName = el?.value;
-                  if (dsName) {
-                    setShareOptions((prev) => ({
-                      ...prev,
-                      [dsName]: e.target.value,
-                    }));
-                  }
-                }}
-              />
-            </div>
-            <button
-              className={s.btnPrimary}
-              onClick={() => {
-                const el = document.getElementById(
-                  "share-dataset-select",
-                ) as HTMLSelectElement | null;
-                const dsName = el?.value;
-                if (dsName) handleShare(dsName);
-              }}
-              disabled={shareMutation.loading}
-            >
-              <Share2 size={14} />
-              {shareMutation.loading ? "Sharing..." : "Share"}
-            </button>
           </div>
+
+          {/* Row 2: Protocol-specific options */}
+          {newShareProtocol === "nfs" ? (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "var(--space-3)",
+                marginBottom: "var(--space-3)",
+              }}
+            >
+              <div>
+                <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                  Access Hosts
+                </label>
+                <input
+                  className={s.select}
+                  style={{ width: "100%", boxSizing: "border-box" }}
+                  value={nfsOpts.hosts}
+                  onChange={(e) => setNfsOpts((o) => ({ ...o, hosts: e.target.value }))}
+                  placeholder="* (all hosts)"
+                />
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: 2 }}>
+                  IP, subnet (10.0.0.0/24), or * for all
+                </div>
+              </div>
+              <div>
+                <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                  Permissions
+                </label>
+                <select
+                  className={s.select}
+                  style={{ width: "100%" }}
+                  value={nfsOpts.permissions}
+                  onChange={(e) =>
+                    setNfsOpts((o) => ({ ...o, permissions: e.target.value as "rw" | "ro" }))
+                  }
+                >
+                  <option value="rw">Read/Write</option>
+                  <option value="ro">Read Only</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={nfsOpts.noRootSquash}
+                    onChange={(e) => setNfsOpts((o) => ({ ...o, noRootSquash: e.target.checked }))}
+                  />
+                  no_root_squash
+                </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)" }}>
+                  Allow root access from clients
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={nfsOpts.sync}
+                    onChange={(e) => setNfsOpts((o) => ({ ...o, sync: e.target.checked }))}
+                  />
+                  Synchronous writes
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={nfsOpts.noSubtreeCheck}
+                    onChange={(e) => setNfsOpts((o) => ({ ...o, noSubtreeCheck: e.target.checked }))}
+                  />
+                  no_subtree_check
+                </label>
+              </div>
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                gap: "var(--space-4)",
+                marginBottom: "var(--space-3)",
+                flexWrap: "wrap",
+              }}
+            >
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={smbOpts.guestOk}
+                  onChange={(e) => setSmbOpts((o) => ({ ...o, guestOk: e.target.checked }))}
+                />
+                Guest Access
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={smbOpts.readOnly}
+                  onChange={(e) => setSmbOpts((o) => ({ ...o, readOnly: e.target.checked }))}
+                />
+                Read Only
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={smbOpts.browseable}
+                  onChange={(e) => setSmbOpts((o) => ({ ...o, browseable: e.target.checked }))}
+                />
+                Browseable
+              </label>
+            </div>
+          )}
+
+          {/* Preview box */}
+          {newShareDataset && (
+            <div
+              style={{
+                background: "var(--color-bg-surface)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "var(--space-2) var(--space-3)",
+                marginBottom: "var(--space-3)",
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--space-2)",
+              }}
+            >
+              <Eye size={14} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>Preview:</span>
+              <code className={s.mono} style={{ fontSize: "var(--text-sm)" }}>
+                {previewOptions}
+              </code>
+            </div>
+          )}
+
+          {/* Share button */}
+          <button
+            className={s.btnPrimary}
+            onClick={handleShare}
+            disabled={shareMutation.loading || !newShareDataset}
+          >
+            <Share2 size={14} />
+            {shareMutation.loading ? "Sharing..." : "Share"}
+          </button>
         </div>
       </div>
 

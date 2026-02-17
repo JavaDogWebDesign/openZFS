@@ -184,6 +184,52 @@ export function exportPool(pool: string) {
   );
 }
 
+// --- Scrub Schedules ---
+
+export interface ScrubSchedule {
+  id: string;
+  pool: string;
+  frequency: string;
+  day_of_week: number;
+  day_of_month: number;
+  hour: number;
+  minute: number;
+  enabled: number;
+  last_run: number | null;
+  last_status: string | null;
+  created_at: number;
+}
+
+export function listScrubSchedules() {
+  return api.get<ScrubSchedule[]>("/api/pools/scrub-schedules");
+}
+
+export function createScrubSchedule(body: {
+  pool: string;
+  frequency: string;
+  day_of_week?: number;
+  day_of_month?: number;
+  hour?: number;
+  minute?: number;
+}) {
+  return api.post<{ id: string; message: string }>("/api/pools/scrub-schedules", body);
+}
+
+export function updateScrubSchedule(id: string, body: {
+  frequency?: string;
+  day_of_week?: number;
+  day_of_month?: number;
+  hour?: number;
+  minute?: number;
+  enabled?: boolean;
+}) {
+  return request<{ message: string }>("PUT", `/api/pools/scrub-schedules/${id}`, body);
+}
+
+export function deleteScrubSchedule(id: string) {
+  return api.del<{ message: string }>(`/api/pools/scrub-schedules/${id}`);
+}
+
 // --- Datasets ---
 
 export interface DatasetSummary {
@@ -452,6 +498,24 @@ export function getSystemVersion() {
   return api.get<{ zfs_version: string; zpool_version: string }>(
     "/api/system/version",
   );
+}
+
+export interface SystemInfo {
+  hostname: string;
+  kernel: string;
+  arch: string;
+  os: string;
+  uptime_seconds: number;
+  cpu_model: string;
+  cpu_cores: number;
+  memory_total: number;
+  memory_available: number;
+  zfs_version: string;
+  zpool_version: string;
+}
+
+export function getSystemInfo() {
+  return api.get<SystemInfo>("/api/system/info");
 }
 
 export function listDisks() {

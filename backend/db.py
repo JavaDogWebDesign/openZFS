@@ -55,9 +55,24 @@ CREATE TABLE IF NOT EXISTS replication_jobs (
     created_at  REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scrub_schedules (
+    id          TEXT PRIMARY KEY,
+    pool        TEXT NOT NULL,
+    frequency   TEXT NOT NULL DEFAULT 'weekly',
+    day_of_week INTEGER NOT NULL DEFAULT 0,
+    day_of_month INTEGER NOT NULL DEFAULT 1,
+    hour        INTEGER NOT NULL DEFAULT 2,
+    minute      INTEGER NOT NULL DEFAULT 0,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    last_run    REAL DEFAULT NULL,
+    last_status TEXT DEFAULT NULL,
+    created_at  REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_replication_enabled ON replication_jobs(enabled);
+CREATE INDEX IF NOT EXISTS idx_scrub_enabled ON scrub_schedules(enabled);
 """
 
 
@@ -229,4 +244,67 @@ async def delete_replication_job(job_id: str) -> None:
     """Delete a replication job."""
     db = await get_db()
     await db.execute("DELETE FROM replication_jobs WHERE id = ?", (job_id,))
+    await db.commit()
+
+
+# --- Scrub schedule helpers ---
+
+
+async def create_scrub_schedule(
+    pool: str,
+    frequency: str = "weekly",
+    day_of_week: int = 0,
+    day_of_month: int = 1,
+    hour: int = 2,
+    minute: int = 0,
+) -> str:
+    """Create a scrub schedule, return its ID."""
+    db = await get_db()
+    schedule_id = uuid.uuid4().hex
+    await db.execute(
+        """INSERT INTO scrub_schedules
+           (id, pool, frequency, day_of_week, day_of_month, hour, minute, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (schedule_id, pool, frequency, day_of_week, day_of_month, hour, minute, time.time()),
+    )
+    await db.commit()
+    return schedule_id
+
+
+async def list_scrub_schedules() -> list[dict]:
+    """List all scrub schedules."""
+    db = await get_db()
+    cursor = await db.execute("SELECT * FROM scrub_schedules ORDER BY created_at DESC")
+    rows = await cursor.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_scrub_schedule(schedule_id: str) -> dict | None:
+    """Get a single scrub schedule."""
+    db = await get_db()
+    cursor = await db.execute("SELECT * FROM scrub_schedules WHERE id = ?", (schedule_id,))
+    row = await cursor.fetchone()
+    return dict(row) if row else None
+
+
+async def update_scrub_schedule(schedule_id: str, **fields: object) -> None:
+    """Update fields on a scrub schedule."""
+    db = await get_db()
+    allowed = {
+        "pool", "frequency", "day_of_week", "day_of_month",
+        "hour", "minute", "enabled", "last_run", "last_status",
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [schedule_id]
+    await db.execute(f"UPDATE scrub_schedules SET {set_clause} WHERE id = ?", values)
+    await db.commit()
+
+
+async def delete_scrub_schedule(schedule_id: str) -> None:
+    """Delete a scrub schedule."""
+    db = await get_db()
+    await db.execute("DELETE FROM scrub_schedules WHERE id = ?", (schedule_id,))
     await db.commit()
