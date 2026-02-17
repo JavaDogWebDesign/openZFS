@@ -48,6 +48,11 @@ async def get_smart_health(device: str) -> dict[str, Any]:
     if rc & 0x03 and "smart_status" not in data:
         return result
 
+    # Only mark as available if smartctl reported SMART support
+    smart_support = data.get("smart_support", {})
+    if isinstance(smart_support, dict) and smart_support.get("available") is False:
+        return result
+
     result["available"] = True
 
     # Health
@@ -61,30 +66,36 @@ async def get_smart_health(device: str) -> dict[str, Any]:
     result["rotation_rate"] = data.get("rotation_rate")
     result["form_factor"] = data.get("form_factor")
 
-    # Temperature
+    # Temperature — treat 0 as "not reported" (common for virtual disks)
     temp = data.get("temperature", {})
     if isinstance(temp, dict):
-        result["temperature"] = temp.get("current")
+        temp_val = temp.get("current")
+        result["temperature"] = temp_val if temp_val else None
 
-    # Power-on hours and error log from SMART attributes table
+    # --- ATA: Power-on hours from SMART attributes table (attribute ID 9) ---
     attrs = data.get("ata_smart_attributes", {}).get("table", [])
     for attr in attrs:
         attr_id = attr.get("id")
         raw_val = attr.get("raw", {}).get("value")
         if attr_id == 9:  # Power_On_Hours
             result["power_on_hours"] = raw_val
-        elif attr_id == 199:  # UDMA_CRC_Error_Count or similar
-            pass
 
-    # NVMe power-on hours
+    # --- SCSI: Power-on hours from power_on_time ---
+    if result["power_on_hours"] is None:
+        power_on_time = data.get("power_on_time", {})
+        if isinstance(power_on_time, dict):
+            result["power_on_hours"] = power_on_time.get("hours")
+
+    # --- NVMe: Power-on hours and temperature ---
     if result["power_on_hours"] is None:
         nvme_health = data.get("nvme_smart_health_information_log", {})
         if isinstance(nvme_health, dict):
             result["power_on_hours"] = nvme_health.get("power_on_hours")
             if result["temperature"] is None:
-                result["temperature"] = nvme_health.get("temperature")
+                temp_val = nvme_health.get("temperature")
+                result["temperature"] = temp_val if temp_val else None
 
-    # Error log count
+    # --- Error log count (ATA or SCSI) ---
     error_log = data.get("ata_smart_error_log", {}).get("summary", {})
     if isinstance(error_log, dict):
         result["smart_error_log_count"] = error_log.get("count")
