@@ -41,7 +41,7 @@ async def login(username: str, password: str, response: Response) -> dict:
     return {"username": username, "message": "Login successful"}
 
 
-async def logout(response: Response, session_id: str | None = Cookie(None, alias=COOKIE_NAME)) -> dict:
+async def logout(response: Response, session_id: str | None = None) -> dict:
     """Delete the session and clear the cookie."""
     if session_id:
         await delete_session(session_id)

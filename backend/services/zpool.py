@@ -448,63 +448,67 @@ async def set_property(pool: str, prop: str, value: str) -> None:
 
 
 async def iostat_stream(pool: str, interval: int = 1) -> AsyncGenerator[dict[str, Any], None]:
-    """Stream I/O stats as an async generator. For use with WebSocket endpoints."""
+    """Stream I/O stats as an async generator. For use with WebSocket endpoints.
+
+    NOTE: Does NOT hold the run_cmd semaphore — streaming processes are
+    long-lived and would starve short-lived REST commands if they held a slot.
+    """
     validate_pool_name(pool)
-    from services.cmd import _zfs_semaphore
-    async with _zfs_semaphore:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "zpool", "iostat", "-Hp", "--", pool, str(interval),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            logger.error("zpool command not found — is ZFS installed?")
-            return
-        try:
-            assert proc.stdout is not None
-            skip_first = True
-            async for raw_line in proc.stdout:
-                line = raw_line.decode().strip()
-                if not line:
-                    continue
-                if skip_first:
-                    skip_first = False
-                    continue
-                fields = line.split("\t")
-                yield {
-                    "pool": pool,
-                    "alloc": fields[1] if len(fields) > 1 else None,
-                    "free": fields[2] if len(fields) > 2 else None,
-                    "read_ops": fields[3] if len(fields) > 3 else None,
-                    "write_ops": fields[4] if len(fields) > 4 else None,
-                    "read_bw": fields[5] if len(fields) > 5 else None,
-                    "write_bw": fields[6] if len(fields) > 6 else None,
-                }
-        finally:
-            proc.terminate()
-            await proc.wait()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "zpool", "iostat", "-Hp", "--", pool, str(interval),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        logger.error("zpool command not found — is ZFS installed?")
+        return
+    try:
+        assert proc.stdout is not None
+        skip_first = True
+        async for raw_line in proc.stdout:
+            line = raw_line.decode().strip()
+            if not line:
+                continue
+            if skip_first:
+                skip_first = False
+                continue
+            fields = line.split("\t")
+            yield {
+                "pool": pool,
+                "alloc": fields[1] if len(fields) > 1 else None,
+                "free": fields[2] if len(fields) > 2 else None,
+                "read_ops": fields[3] if len(fields) > 3 else None,
+                "write_ops": fields[4] if len(fields) > 4 else None,
+                "read_bw": fields[5] if len(fields) > 5 else None,
+                "write_bw": fields[6] if len(fields) > 6 else None,
+            }
+    finally:
+        proc.terminate()
+        await proc.wait()
 
 
 async def events_stream() -> AsyncGenerator[str, None]:
-    """Stream zpool events as an async generator. For use with WebSocket endpoints."""
-    from services.cmd import _zfs_semaphore
-    async with _zfs_semaphore:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "zpool", "events", "-f", "-H",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError:
-            logger.error("zpool command not found — is ZFS installed?")
-            return
-        try:
-            assert proc.stdout is not None
-            async for raw_line in proc.stdout:
-                line = raw_line.decode().strip()
-                if line:
-                    yield line
-        finally:
-            proc.terminate()
-            await proc.wait()
+    """Stream zpool events as an async generator. For use with WebSocket endpoints.
+
+    NOTE: Does NOT hold the run_cmd semaphore — streaming processes are
+    long-lived and would starve short-lived REST commands if they held a slot.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "zpool", "events", "-f", "-H",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        logger.error("zpool command not found — is ZFS installed?")
+        return
+    try:
+        assert proc.stdout is not None
+        async for raw_line in proc.stdout:
+            line = raw_line.decode().strip()
+            if line:
+                yield line
+    finally:
+        proc.terminate()
+        await proc.wait()

@@ -5,7 +5,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Cookie, Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -96,8 +96,8 @@ async def auth_login(body: LoginRequest, response: Response):
 
 
 @app.post("/api/auth/logout")
-async def auth_logout(response: Response):
-    return await logout(response)
+async def auth_logout(response: Response, zfs_session: str | None = Cookie(None)):
+    return await logout(response, zfs_session)
 
 
 @app.get("/api/auth/me")
