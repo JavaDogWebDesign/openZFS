@@ -1,6 +1,7 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 python-pam>=2.0.0
+six>=1.16.0
 pydantic>=2.10.0
 websockets>=14.0
 aiosqlite>=0.20.0
