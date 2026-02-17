@@ -18,8 +18,7 @@ RestartSec=5
 # See docs/DESIGN.md "Privilege Model" for the full security rationale.
 NoNewPrivileges=no
 ProtectHome=read-only
-ProtectSystem=strict
-ReadWritePaths=/opt/zfs-manager/backend/data /mnt /srv /pool /pools /tank /data
+ProtectSystem=no
 PrivateTmp=true
 
 # Environment
