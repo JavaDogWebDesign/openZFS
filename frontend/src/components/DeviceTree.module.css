@@ -1,0 +1,212 @@
+/* DeviceTree — collapsible tree visualization for ZFS device topology */
+
+.container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Individual tree node ───────────────────────────────── */
+
+.node {
+  display: flex;
+  flex-direction: column;
+}
+
+.nodeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+  min-height: 36px;
+}
+
+.nodeRow:hover {
+  background: var(--color-bg-hover);
+}
+
+/* ── Tree indentation and vertical lines ────────────────── */
+
+.indentGuide {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  flex-shrink: 0;
+}
+
+.indentSegment {
+  width: 20px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Vertical line for each indent level */
+.indentSegment::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-border);
+}
+
+/* Last child: cut the vertical line at the midpoint */
+.indentSegmentLast::before {
+  bottom: 50%;
+}
+
+/* Horizontal connector from vertical line to node */
+.indentSegment::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  width: 10px;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* For continuation segments (not the last), no horizontal connector */
+.indentSegmentContinue::after {
+  display: none;
+}
+
+/* When a segment has no line at all (parent was last child) */
+.indentSegmentEmpty::before {
+  display: none;
+}
+
+.indentSegmentEmpty::after {
+  display: none;
+}
+
+/* ── Toggle button ──────────────────────────────────────── */
+
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.toggle:hover {
+  color: var(--color-text);
+  background: var(--color-bg-surface);
+}
+
+.togglePlaceholder {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+/* ── Device icon ────────────────────────────────────────── */
+
+.deviceIcon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* ── Device name ────────────────────────────────────────── */
+
+.deviceName {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── State badge ────────────────────────────────────────── */
+
+.stateBadge {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 1px var(--space-2);
+  border-radius: 9999px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.stateOnline {
+  color: var(--color-success);
+  background: var(--color-success-dim);
+}
+
+.stateDegraded {
+  color: var(--color-warning);
+  background: var(--color-warning-dim);
+}
+
+.stateFaulted {
+  color: var(--color-danger);
+  background: var(--color-danger-dim);
+}
+
+.stateOffline {
+  color: var(--color-text-dim);
+  background: var(--color-bg-surface);
+}
+
+/* ── Error badges ───────────────────────────────────────── */
+
+.errorsGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.errorBadge {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--color-danger);
+  background: var(--color-danger-dim);
+  padding: 1px var(--space-2);
+  border-radius: 9999px;
+  white-space: nowrap;
+}
+
+.errorBadgeIcon {
+  flex-shrink: 0;
+}
+
+/* ── Children container ─────────────────────────────────── */
+
+.children {
+  display: flex;
+  flex-direction: column;
+}
+
+.childrenCollapsed {
+  display: none;
+}
+
+/* ── Empty state ────────────────────────────────────────── */
+
+.empty {
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  padding: var(--space-4);
+  text-align: center;
+}

@@ -1,0 +1,29 @@
+[Unit]
+Description=ZFS Manager Web GUI
+After=network.target zfs.target
+Wants=zfs.target
+
+[Service]
+Type=simple
+# Must run as root to execute zfs/zpool commands
+User=root
+Group=root
+WorkingDirectory=/opt/zfs-manager/backend
+ExecStart=/opt/zfs-manager/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+
+# Security hardening (as much as possible while still running as root)
+# NoNewPrivileges must be 'no' because PAM authentication uses setuid helpers.
+# See docs/DESIGN.md "Privilege Model" for the full security rationale.
+NoNewPrivileges=no
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/opt/zfs-manager/backend/data
+PrivateTmp=true
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
