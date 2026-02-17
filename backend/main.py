@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from exceptions import ZFSError
@@ -136,5 +136,26 @@ async def health() -> dict:
 # Must be mounted AFTER all API routes so /api/* takes priority.
 
 _frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-if _frontend_dist.is_dir():
-    app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="frontend")
+_index_html = _frontend_dist / "index.html"
+
+if _frontend_dist.is_dir() and _index_html.is_file():
+    # Serve JS/CSS/image bundles from the assets directory
+    _assets_dir = _frontend_dist / "assets"
+    if _assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="static-assets")
+
+    # SPA fallback: serve index.html for all non-API routes
+    # This ensures client-side routing works on page refresh/direct navigation
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str) -> Response:
+        # Serve actual files from dist (e.g., favicon.ico, robots.txt)
+        file_path = (_frontend_dist / full_path).resolve()
+        if (
+            full_path
+            and not full_path.startswith("api/")
+            and file_path.is_relative_to(_frontend_dist)
+            and file_path.is_file()
+        ):
+            return FileResponse(str(file_path))
+        # Everything else gets index.html — React Router handles the route
+        return FileResponse(str(_index_html))
