@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Database,
   Heart,
@@ -10,6 +10,8 @@ import { listPools, type PoolSummary } from "@/lib/api";
 import { useApi } from "@/hooks/useApi";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { IoChart } from "@/components/IoChart";
+import { connectPool } from "@/lib/iostat-store";
+import { healthBadgeClass } from "@/lib/format";
 import css from "@/styles/views.module.css";
 
 /* ---------- WebSocket payload types ---------- */
@@ -22,21 +24,6 @@ interface ZfsEvent {
 }
 
 /* ---------- Helpers ---------- */
-
-function healthBadge(health: string): string {
-  switch (health.toUpperCase()) {
-    case "ONLINE":
-      return css.badgeSuccess;
-    case "DEGRADED":
-      return css.badgeWarning;
-    case "FAULTED":
-    case "UNAVAIL":
-    case "REMOVED":
-      return css.badgeDanger;
-    default:
-      return css.badgeMuted;
-  }
-}
 
 function parseCapacity(raw: string): number {
   const n = parseInt(raw, 10);
@@ -52,15 +39,24 @@ export function Dashboard(): JSX.Element {
   const [selectedPool, setSelectedPool] = useState<string>("");
   const activePool = selectedPool || pools?.[0]?.name || "";
 
+  /* Start iostat collection as soon as we know a pool name */
+  useEffect(() => {
+    if (activePool) connectPool(activePool);
+  }, [activePool]);
+
   /* WebSocket: ZFS event feed */
   const events = useWebSocket<ZfsEvent>({
     url: "/api/ws/events",
   });
 
-  /* Accumulate events into a rolling buffer (last 20) */
-  const eventLog = useMemo(() => {
-    if (!events.data) return [] as ZfsEvent[];
-    return [events.data];
+  /* Accumulate events into a rolling buffer (last 50) */
+  const eventLogRef = useRef<ZfsEvent[]>([]);
+  const [eventLog, setEventLog] = useState<ZfsEvent[]>([]);
+  useEffect(() => {
+    if (!events.data) return;
+    const next = [events.data, ...eventLogRef.current].slice(0, 50);
+    eventLogRef.current = next;
+    setEventLog(next);
   }, [events.data]);
 
   /* -- Derived stats -- */
@@ -126,7 +122,7 @@ export function Dashboard(): JSX.Element {
             <Heart size={12} /> Overall Health
           </div>
           <div className={css.statValue}>
-            <span className={healthBadge(overallHealth)}>{overallHealth}</span>
+            <span className={healthBadgeClass(overallHealth, css)}>{overallHealth}</span>
           </div>
         </div>
 
@@ -159,7 +155,7 @@ export function Dashboard(): JSX.Element {
                 }}
               >
                 <span className={css.mono} style={{ fontSize: "var(--text-sm)" }}>{pool.name}</span>
-                <span className={healthBadge(pool.health)}>{pool.health}</span>
+                <span className={healthBadgeClass(pool.health, css)}>{pool.health}</span>
               </div>
             ))}
           </div>

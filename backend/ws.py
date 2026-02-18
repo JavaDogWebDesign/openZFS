@@ -11,11 +11,25 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from db import get_session
 from services import zpool
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _ws_authenticate(websocket: WebSocket) -> bool:
+    """Check session cookie for WebSocket auth. Returns True if valid."""
+    session_id = websocket.cookies.get("zfs_session")
+    if not session_id:
+        await websocket.close(code=4001, reason="Not authenticated")
+        return False
+    session = await get_session(session_id)
+    if not session:
+        await websocket.close(code=4001, reason="Session expired")
+        return False
+    return True
 
 
 @router.websocket("/iostat")
@@ -26,6 +40,8 @@ async def ws_iostat(ws: WebSocket, pool: str = ""):
         return
 
     await ws.accept()
+    if not await _ws_authenticate(ws):
+        return
     logger.info("WebSocket iostat stream started for pool: %s", pool)
 
     try:
@@ -45,6 +61,8 @@ async def ws_iostat(ws: WebSocket, pool: str = ""):
 async def ws_events(ws: WebSocket):
     """Stream zpool events over WebSocket."""
     await ws.accept()
+    if not await _ws_authenticate(ws):
+        return
     logger.info("WebSocket events stream started")
 
     try:
@@ -69,6 +87,8 @@ async def ws_send_progress(ws: WebSocket):
     is parsed from `zfs send -v` stderr output.
     """
     await ws.accept()
+    if not await _ws_authenticate(ws):
+        return
     logger.info("WebSocket send-progress stream started")
 
     try:

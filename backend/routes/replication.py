@@ -1,6 +1,6 @@
 """Replication management API routes."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from middleware.auth import get_current_user
 from models import ManualSendRequest, ReplicationJobCreate, ReplicationJobUpdate
@@ -46,13 +46,16 @@ async def get_job(job_id: str, user: dict = Depends(get_current_user)):
     """Get a single replication job."""
     job = await get_replication_job(job_id)
     if job is None:
-        return {"error": "Job not found"}, 404
+        raise HTTPException(status_code=404, detail="Job not found")
     return job
 
 
 @router.patch("/jobs/{job_id}")
 async def update_job(job_id: str, body: ReplicationJobUpdate, user: dict = Depends(get_current_user)):
     """Update a replication job."""
+    job = await get_replication_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
     updates = body.model_dump(exclude_none=True)
     await update_replication_job(job_id, **updates)
     await audit_log(user["username"], "replication.update", job_id)
@@ -62,6 +65,9 @@ async def update_job(job_id: str, body: ReplicationJobUpdate, user: dict = Depen
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str, user: dict = Depends(get_current_user)):
     """Delete a replication job."""
+    job = await get_replication_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
     await delete_replication_job(job_id)
     await audit_log(user["username"], "replication.delete", job_id)
     return {"message": "Job deleted"}

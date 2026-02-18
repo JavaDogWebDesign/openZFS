@@ -138,7 +138,7 @@ export function createPool(body: {
   return api.post<{ message: string }>("/api/pools", body);
 }
 
-export function destroyPool(pool: string, confirm: string, force = false) {
+export function destroyPool(pool: string, confirm: string, force = true) {
   return api.del<{ message: string }>(`/api/pools/${encodeURIComponent(pool)}`, {
     confirm,
     force,

@@ -4,7 +4,10 @@ Uses python-pam to authenticate against system users.
 Sessions are stored in SQLite (see db.py).
 """
 
+import asyncio
 import logging
+import time
+from collections import defaultdict
 
 import pam
 from fastapi import Cookie, Depends, HTTPException, Request, Response
@@ -17,15 +20,31 @@ _pam = pam.pam()
 
 COOKIE_NAME = "zfs_session"
 
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_MAX_ATTEMPTS = 5
+_WINDOW = 300  # 5 minutes
 
-def authenticate_user(username: str, password: str) -> bool:
+
+def check_rate_limit(username: str) -> bool:
+    """Returns True if the login attempt should be allowed."""
+    now = time.time()
+    attempts = _login_attempts[username]
+    # Remove old attempts
+    _login_attempts[username] = [t for t in attempts if now - t < _WINDOW]
+    if len(_login_attempts[username]) >= _MAX_ATTEMPTS:
+        return False
+    _login_attempts[username].append(now)
+    return True
+
+
+async def authenticate_user(username: str, password: str) -> bool:
     """Authenticate a user via PAM."""
-    return _pam.authenticate(username, password)
+    return await asyncio.to_thread(_pam.authenticate, username, password)
 
 
 async def login(username: str, password: str, response: Response) -> dict:
     """Authenticate and create a session cookie."""
-    if not authenticate_user(username, password):
+    if not await authenticate_user(username, password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     session_id = await create_session(username)

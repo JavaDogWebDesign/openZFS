@@ -3,8 +3,8 @@
  */
 
 /** Format raw bytes into a human-readable string (B / KiB / MiB / GiB / TiB). */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KiB`;
   if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
@@ -35,4 +35,20 @@ export function formatDuration(seconds: number): string {
 /** Format a Unix epoch (seconds) into a locale date/time string. */
 export function formatTimestamp(epochSeconds: number): string {
   return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+/** Get the CSS class for a ZFS health status badge. */
+export function healthBadgeClass(health: string, styles: Record<string, string>): string {
+  switch (health.toUpperCase()) {
+    case "ONLINE":
+      return styles.badgeSuccess;
+    case "DEGRADED":
+      return styles.badgeWarning;
+    case "FAULTED":
+    case "UNAVAIL":
+    case "REMOVED":
+      return styles.badgeDanger;
+    default:
+      return styles.badgeMuted;
+  }
 }

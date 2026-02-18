@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useState } from "react";
 import {
+  Bookmark,
   Camera,
   ChevronDown,
   Clock,
@@ -8,6 +9,7 @@ import {
   Lock,
   Plus,
   RotateCcw,
+  Shield,
   Trash2,
   X,
 } from "lucide-react";
@@ -20,18 +22,34 @@ import {
   cloneSnapshot,
   diffSnapshots,
   holdSnapshot,
+  releaseHold,
+  listHolds,
+  listBookmarks,
+  createBookmark,
   type DatasetSummary,
   type SnapshotSummary,
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/Toast";
+import { formatBytes } from "@/lib/format";
 import styles from "@/styles/views.module.css";
 
 interface DiffEntry {
   change_type: string;
   path: string;
   new_path?: string;
+}
+
+interface HoldEntry {
+  name: string;
+  tag: string;
+  timestamp: string;
+}
+
+interface BookmarkEntry {
+  name: string;
+  creation: string;
 }
 
 function formatDate(dateStr: string): string {
@@ -87,6 +105,14 @@ export function Snapshots() {
   const [holdSource, setHoldSource] = useState<string | null>(null);
   const [holdTag, setHoldTag] = useState("keep");
 
+  // Holds viewer state
+  const [holdsSnap, setHoldsSnap] = useState<string | null>(null);
+
+  // Bookmarks state
+  const [showBookmarks, setShowBookmarks] = useState(false);
+  const [newBookmarkSnap, setNewBookmarkSnap] = useState("");
+  const [newBookmarkName, setNewBookmarkName] = useState("");
+
   // Diff state
   const [diffSnapA, setDiffSnapA] = useState<string>("");
   const [diffSnapB, setDiffSnapB] = useState<string>("");
@@ -116,6 +142,34 @@ export function Snapshots() {
     [selectedDataset],
   );
 
+  // Holds fetching
+  const {
+    data: holds,
+    loading: holdsLoading,
+    error: holdsError,
+    refetch: refetchHolds,
+  } = useApi<HoldEntry[]>(
+    () =>
+      holdsSnap
+        ? listHolds(holdsSnap)
+        : Promise.resolve([] as HoldEntry[]),
+    [holdsSnap],
+  );
+
+  // Bookmarks fetching
+  const {
+    data: bookmarks,
+    loading: bookmarksLoading,
+    error: bookmarksError,
+    refetch: refetchBookmarks,
+  } = useApi<BookmarkEntry[]>(
+    () =>
+      selectedDataset && showBookmarks
+        ? listBookmarks(selectedDataset)
+        : Promise.resolve([] as BookmarkEntry[]),
+    [selectedDataset, showBookmarks],
+  );
+
   // --- Mutations ---
 
   const createMut = useMutation(
@@ -139,6 +193,14 @@ export function Snapshots() {
     holdSnapshot(snapshot, tag),
   );
 
+  const releaseHoldMut = useMutation((snapshot: string, tag: string) =>
+    releaseHold(snapshot, tag),
+  );
+
+  const createBookmarkMut = useMutation((snapshot: string, name: string) =>
+    createBookmark(snapshot, name),
+  );
+
   // --- Handlers ---
 
   const handleDatasetChange = useCallback((value: string) => {
@@ -147,6 +209,8 @@ export function Snapshots() {
     setDiffSnapB("");
     setDiffResults(null);
     setDiffError(null);
+    setHoldsSnap(null);
+    setShowBookmarks(false);
   }, []);
 
   const handleCreateSubmit = useCallback(
@@ -193,19 +257,51 @@ export function Snapshots() {
     if (!cloneSource || !cloneTarget) return;
     const result = await cloneMut.execute(cloneSource, cloneTarget);
     if (result) {
+      addToast("success", "Snapshot cloned successfully");
       setCloneSource(null);
       setCloneTarget("");
+    } else if (cloneMut.error) {
+      addToast("error", cloneMut.error);
     }
-  }, [cloneSource, cloneTarget, cloneMut]);
+  }, [cloneSource, cloneTarget, cloneMut, addToast]);
 
   const handleHold = useCallback(async () => {
     if (!holdSource || !holdTag) return;
     const result = await holdMut.execute(holdSource, holdTag);
     if (result) {
+      addToast("success", "Hold placed on snapshot");
       setHoldSource(null);
       setHoldTag("keep");
+    } else if (holdMut.error) {
+      addToast("error", holdMut.error);
     }
-  }, [holdSource, holdTag, holdMut]);
+  }, [holdSource, holdTag, holdMut, addToast]);
+
+  const handleReleaseHold = useCallback(
+    async (snapshot: string, tag: string) => {
+      const result = await releaseHoldMut.execute(snapshot, tag);
+      if (result) {
+        addToast("success", `Hold "${tag}" released`);
+        refetchHolds();
+      } else if (releaseHoldMut.error) {
+        addToast("error", releaseHoldMut.error);
+      }
+    },
+    [releaseHoldMut, refetchHolds, addToast],
+  );
+
+  const handleCreateBookmark = useCallback(async () => {
+    if (!newBookmarkSnap || !newBookmarkName) return;
+    const result = await createBookmarkMut.execute(newBookmarkSnap, newBookmarkName);
+    if (result) {
+      addToast("success", `Bookmark "${newBookmarkName}" created`);
+      setNewBookmarkSnap("");
+      setNewBookmarkName("");
+      refetchBookmarks();
+    } else if (createBookmarkMut.error) {
+      addToast("error", createBookmarkMut.error);
+    }
+  }, [newBookmarkSnap, newBookmarkName, createBookmarkMut, refetchBookmarks, addToast]);
 
   const handleDiff = useCallback(async () => {
     if (!diffSnapA || !diffSnapB) return;
@@ -492,6 +588,313 @@ export function Snapshots() {
     );
   };
 
+  const renderHoldsPanel = () => {
+    if (!holdsSnap) return null;
+
+    return (
+      <div className={styles.card}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "var(--space-3)",
+          }}
+        >
+          <div className={styles.cardTitle}>
+            <Shield
+              size={16}
+              style={{ display: "inline", verticalAlign: "middle", marginRight: 6 }}
+            />
+            Holds for {getSnapshotShortName(holdsSnap)}
+          </div>
+          <button
+            className={styles.btnGhost}
+            onClick={() => setHoldsSnap(null)}
+            style={{ padding: "var(--space-1)" }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {holdsLoading && (
+          <div className={styles.loading}>Loading holds...</div>
+        )}
+
+        {holdsError && <div className={styles.error}>{holdsError}</div>}
+
+        {!holdsLoading && holds && holds.length === 0 && (
+          <div className={styles.empty} style={{ padding: "var(--space-4)" }}>
+            No holds on this snapshot
+          </div>
+        )}
+
+        {!holdsLoading && holds && holds.length > 0 && (
+          <div
+            style={{
+              border: "1px solid var(--color-border)",
+              borderRadius: "var(--radius-sm)",
+            }}
+          >
+            {holds.map((hold) => (
+              <div
+                key={hold.tag}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "var(--space-2) var(--space-3)",
+                  borderBottom: "1px solid var(--color-border)",
+                }}
+              >
+                <div>
+                  <span
+                    className={styles.mono}
+                    style={{ fontWeight: 500 }}
+                  >
+                    {hold.tag}
+                  </span>
+                  {hold.timestamp && (
+                    <span
+                      style={{
+                        fontSize: "var(--text-xs)",
+                        color: "var(--color-text-muted)",
+                        marginLeft: "var(--space-2)",
+                      }}
+                    >
+                      {formatDate(hold.timestamp)}
+                    </span>
+                  )}
+                </div>
+                <button
+                  className={styles.btnDanger}
+                  style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
+                  onClick={() => handleReleaseHold(holdsSnap, hold.tag)}
+                  disabled={releaseHoldMut.loading}
+                  title="Release this hold"
+                >
+                  {releaseHoldMut.loading ? "Releasing..." : "Release"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderBookmarksSection = () => {
+    if (!selectedDataset || !showBookmarks) return null;
+
+    return (
+      <div className={styles.card}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "var(--space-3)",
+          }}
+        >
+          <div className={styles.cardTitle}>
+            <Bookmark
+              size={16}
+              style={{ display: "inline", verticalAlign: "middle", marginRight: 6 }}
+            />
+            Bookmarks
+          </div>
+          <button
+            className={styles.btnGhost}
+            onClick={() => setShowBookmarks(false)}
+            style={{ padding: "var(--space-1)" }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {bookmarksLoading && (
+          <div className={styles.loading}>Loading bookmarks...</div>
+        )}
+
+        {bookmarksError && <div className={styles.error}>{bookmarksError}</div>}
+
+        {!bookmarksLoading && bookmarks && bookmarks.length === 0 && (
+          <div className={styles.empty} style={{ padding: "var(--space-4)" }}>
+            No bookmarks for this dataset
+          </div>
+        )}
+
+        {!bookmarksLoading && bookmarks && bookmarks.length > 0 && (
+          <div
+            style={{
+              border: "1px solid var(--color-border)",
+              borderRadius: "var(--radius-sm)",
+              marginBottom: "var(--space-3)",
+            }}
+          >
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr
+                  style={{
+                    borderBottom: "1px solid var(--color-border)",
+                    textAlign: "left",
+                  }}
+                >
+                  <th
+                    style={{
+                      padding: "var(--space-2)",
+                      fontSize: "var(--text-xs)",
+                      color: "var(--color-text-muted)",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Name
+                  </th>
+                  <th
+                    style={{
+                      padding: "var(--space-2)",
+                      fontSize: "var(--text-xs)",
+                      color: "var(--color-text-muted)",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Creation
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {bookmarks.map((bm) => (
+                  <tr
+                    key={bm.name}
+                    style={{
+                      borderBottom: "1px solid var(--color-border)",
+                    }}
+                  >
+                    <td
+                      className={styles.mono}
+                      style={{ padding: "var(--space-2)" }}
+                    >
+                      <Bookmark
+                        size={12}
+                        style={{
+                          display: "inline",
+                          verticalAlign: "middle",
+                          marginRight: 4,
+                          opacity: 0.5,
+                        }}
+                      />
+                      {bm.name}
+                    </td>
+                    <td
+                      style={{
+                        padding: "var(--space-2)",
+                        fontSize: "var(--text-sm)",
+                      }}
+                    >
+                      {formatDate(bm.creation)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Create bookmark form */}
+        {snapshots && snapshots.length > 0 && (
+          <div
+            style={{
+              borderTop: "1px solid var(--color-border)",
+              paddingTop: "var(--space-3)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "var(--text-sm)",
+                fontWeight: 500,
+                marginBottom: "var(--space-2)",
+              }}
+            >
+              Create Bookmark from Snapshot
+            </div>
+
+            {createBookmarkMut.error && (
+              <div className={styles.error}>{createBookmarkMut.error}</div>
+            )}
+
+            <div
+              style={{
+                display: "flex",
+                gap: "var(--space-2)",
+                alignItems: "end",
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "var(--text-xs)",
+                    color: "var(--color-text-muted)",
+                    textTransform: "uppercase",
+                    marginBottom: "var(--space-1)",
+                  }}
+                >
+                  Source Snapshot
+                </label>
+                <select
+                  className={styles.select}
+                  style={{ width: "100%" }}
+                  value={newBookmarkSnap}
+                  onChange={(e) => setNewBookmarkSnap(e.target.value)}
+                >
+                  <option value="">Select snapshot...</option>
+                  {snapshots.map((s) => (
+                    <option key={s.name} value={s.name}>
+                      {getSnapshotShortName(s.name)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "var(--text-xs)",
+                    color: "var(--color-text-muted)",
+                    textTransform: "uppercase",
+                    marginBottom: "var(--space-1)",
+                  }}
+                >
+                  Bookmark Name
+                </label>
+                <input
+                  className={styles.select}
+                  style={{ width: "100%", boxSizing: "border-box" }}
+                  value={newBookmarkName}
+                  onChange={(e) => setNewBookmarkName(e.target.value)}
+                  placeholder="e.g. pre-upgrade"
+                />
+              </div>
+              <button
+                className={styles.btnPrimary}
+                onClick={handleCreateBookmark}
+                disabled={
+                  createBookmarkMut.loading ||
+                  !newBookmarkSnap ||
+                  !newBookmarkName
+                }
+              >
+                <Bookmark size={14} />
+                {createBookmarkMut.loading ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderDiffSection = () => {
     if (!snapshots || snapshots.length < 2) return null;
 
@@ -678,13 +1081,23 @@ export function Snapshots() {
         <h1 className={styles.title}>Snapshots</h1>
         <div className={styles.actions}>
           {selectedDataset && (
-            <button
-              className={styles.btnPrimary}
-              onClick={() => setShowCreateForm((v) => !v)}
-            >
-              <Plus size={16} />
-              Create Snapshot
-            </button>
+            <>
+              <button
+                className={styles.btnGhost}
+                onClick={() => setShowBookmarks((v) => !v)}
+                title="View and manage bookmarks for this dataset"
+              >
+                <Bookmark size={16} />
+                Bookmarks
+              </button>
+              <button
+                className={styles.btnPrimary}
+                onClick={() => setShowCreateForm((v) => !v)}
+              >
+                <Plus size={16} />
+                Create Snapshot
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -909,7 +1322,7 @@ export function Snapshots() {
                         textAlign: "right",
                       }}
                     >
-                      {snap.used}
+                      {formatBytes(Number(snap.used))}
                     </td>
                     <td
                       className={styles.mono}
@@ -918,7 +1331,7 @@ export function Snapshots() {
                         textAlign: "right",
                       }}
                     >
-                      {snap.refer}
+                      {formatBytes(Number(snap.refer))}
                     </td>
                     <td
                       style={{
@@ -937,7 +1350,7 @@ export function Snapshots() {
                           className={styles.btnGhost}
                           style={{ padding: "var(--space-1) var(--space-2)" }}
                           onClick={() => setRollbackTarget(snap.name)}
-                          title="Rollback"
+                          title="Revert this dataset to the state at this snapshot. Data written after this snapshot will be lost."
                         >
                           <RotateCcw size={14} />
                         </button>
@@ -948,9 +1361,17 @@ export function Snapshots() {
                             setCloneSource(snap.name);
                             setCloneTarget("");
                           }}
-                          title="Clone"
+                          title="Create a new dataset from this snapshot. The clone shares data blocks with the original."
                         >
                           <Copy size={14} />
+                        </button>
+                        <button
+                          className={styles.btnGhost}
+                          style={{ padding: "var(--space-1) var(--space-2)" }}
+                          onClick={() => setHoldsSnap(snap.name)}
+                          title="View holds on this snapshot"
+                        >
+                          <Shield size={14} />
                         </button>
                         <button
                           className={styles.btnGhost}
@@ -959,7 +1380,7 @@ export function Snapshots() {
                             setHoldSource(snap.name);
                             setHoldTag("keep");
                           }}
-                          title="Hold"
+                          title="Prevent this snapshot from being destroyed. Useful for protecting important snapshots."
                         >
                           <Lock size={14} />
                         </button>
@@ -967,7 +1388,7 @@ export function Snapshots() {
                           className={styles.btnDanger}
                           style={{ padding: "var(--space-1) var(--space-2)" }}
                           onClick={() => setDestroyTarget(snap.name)}
-                          title="Destroy"
+                          title="Permanently delete this snapshot. This cannot be undone."
                         >
                           <Trash2 size={14} />
                         </button>
@@ -980,8 +1401,14 @@ export function Snapshots() {
           </div>
         )}
 
+      {/* Holds panel */}
+      {renderHoldsPanel()}
+
       {/* Diff section */}
       {renderDiffSection()}
+
+      {/* Bookmarks section */}
+      {renderBookmarksSection()}
 
       {/* Clone modal */}
       {renderCloneModal()}

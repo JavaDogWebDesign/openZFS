@@ -9,6 +9,8 @@ import {
   type DatasetSummary,
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
+import { useToast } from "@/components/Toast";
+import { formatBytes } from "@/lib/format";
 import {
   Plus,
   Trash2,
@@ -52,15 +54,6 @@ function formatTimestamp(ts: number | null): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
-function formatBytes(bytes: number | null): string {
-  if (!bytes) return "-";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
-}
-
 function statusBadge(status: string | null): string {
   if (!status) return s.badgeMuted;
   const lower = status.toLowerCase();
@@ -99,6 +92,8 @@ export function Replication() {
     [sendDataset],
   );
 
+  const { addToast } = useToast();
+
   const createMutation = useMutation(
     (body: Parameters<typeof createReplicationJob>[0]) =>
       createReplicationJob(body),
@@ -128,17 +123,23 @@ export function Replication() {
       schedule: form.schedule || undefined,
     });
     if (result) {
+      addToast("success", `Replication job "${form.name}" created`);
       setForm(emptyForm);
       setShowForm(false);
       refetchJobs();
+    } else if (createMutation.error) {
+      addToast("error", createMutation.error);
     }
   };
 
   const handleDelete = async (id: string) => {
     const result = await deleteMutation.execute(id);
     if (result) {
+      addToast("success", "Replication job deleted");
       setConfirmDelete(null);
       refetchJobs();
+    } else if (deleteMutation.error) {
+      addToast("error", deleteMutation.error);
     }
   };
 
@@ -240,6 +241,9 @@ export function Replication() {
                   <option value="local">Local</option>
                   <option value="ssh">SSH (Remote)</option>
                 </select>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: 2 }}>
+                  Local copies data between pools on this machine. SSH sends data to a remote server.
+                </div>
               </div>
             </div>
 
@@ -324,8 +328,11 @@ export function Replication() {
                   onChange={(e) => updateForm("schedule", e.target.value)}
                   placeholder="0 2 * * * (daily at 2 AM)"
                 />
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: 2 }}>
+                  Format: minute hour day month weekday. Examples: <code>0 2 * * *</code> = daily 2 AM, <code>0 */6 * * *</code> = every 6 hours, <code>0 3 * * 0</code> = Sunday 3 AM. Leave empty for manual-only.
+                </div>
               </div>
-              <div style={{ display: "flex", gap: "var(--space-4)", alignItems: "flex-end", paddingBottom: "var(--space-2)" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", paddingBottom: "var(--space-2)" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)" }}>
                   <input
                     type="checkbox"
@@ -334,14 +341,16 @@ export function Replication() {
                   />
                   Recursive
                 </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginLeft: 22 }}>Include all child datasets in the replication</div>
                 <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)" }}>
                   <input
                     type="checkbox"
                     checked={form.raw_send}
                     onChange={(e) => updateForm("raw_send", e.target.checked)}
                   />
-                  Raw
+                  Raw Send
                 </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginLeft: 22 }}>Send encrypted data as-is without decrypting (required for encrypted datasets)</div>
                 <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)" }}>
                   <input
                     type="checkbox"
@@ -350,6 +359,7 @@ export function Replication() {
                   />
                   Compressed
                 </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginLeft: 22 }}>Send data in compressed form to save bandwidth</div>
               </div>
             </div>
 

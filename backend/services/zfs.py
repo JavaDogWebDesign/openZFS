@@ -8,7 +8,7 @@ Parse TAB-delimited output, not spaces.
 import logging
 from typing import Any
 
-from exceptions import parse_zfs_error
+from exceptions import ZFSInvalidArgumentError, parse_zfs_error
 from services.cmd import (
     run_cmd,
     validate_bookmark,
@@ -426,6 +426,8 @@ async def change_key(dataset: str, new_passphrase: str | None = None, new_key_fi
 async def allow(dataset: str, entity: str, permissions: list[str], entity_type: str = "user") -> None:
     """Delegate ZFS permissions."""
     validate_dataset_path(dataset)
+    if entity.startswith("-"):
+        raise ZFSInvalidArgumentError("Invalid entity name")
     perms = ",".join(permissions)
     cmd = ["zfs", "allow"]
     if entity_type == "group":
@@ -439,6 +441,8 @@ async def allow(dataset: str, entity: str, permissions: list[str], entity_type: 
 async def unallow(dataset: str, entity: str, permissions: list[str], entity_type: str = "user") -> None:
     """Remove delegated ZFS permissions."""
     validate_dataset_path(dataset)
+    if entity.startswith("-"):
+        raise ZFSInvalidArgumentError("Invalid entity name")
     perms = ",".join(permissions)
     cmd = ["zfs", "unallow"]
     if entity_type == "group":

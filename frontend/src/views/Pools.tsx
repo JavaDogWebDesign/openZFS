@@ -9,6 +9,10 @@ import {
   Trash2,
   AlertTriangle,
   Clock,
+  Download,
+  Pause,
+  Square,
+  History,
 } from "lucide-react";
 import {
   listPools,
@@ -17,6 +21,8 @@ import {
   trimPool,
   exportPool,
   destroyPool,
+  importPool,
+  getPoolHistory,
   listScrubSchedules,
   createScrubSchedule,
   deleteScrubSchedule,
@@ -29,25 +35,8 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PoolWizard } from "@/components/PoolWizard";
 import { DeviceTree } from "@/components/DeviceTree";
 import { useToast } from "@/components/Toast";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, healthBadgeClass } from "@/lib/format";
 import css from "@/styles/views.module.css";
-
-/* ---------- Helpers ---------- */
-
-function healthBadge(health: string): string {
-  switch (health.toUpperCase()) {
-    case "ONLINE":
-      return css.badgeSuccess;
-    case "DEGRADED":
-      return css.badgeWarning;
-    case "FAULTED":
-    case "UNAVAIL":
-    case "REMOVED":
-      return css.badgeDanger;
-    default:
-      return css.badgeMuted;
-  }
-}
 
 /* ---------- Sub-components ---------- */
 
@@ -150,6 +139,10 @@ export function Pools(): JSX.Element {
 
   const { addToast } = useToast();
 
+  /* Per-pool loading states to avoid showing "Scrubbing..." on all cards */
+  const [scrubbing, setScrubbing] = useState<string | null>(null);
+  const [trimming, setTrimming] = useState<string | null>(null);
+
   /* Selected pool detail */
   const [selectedPool, setSelectedPool] = useState<string | null>(null);
   const {
@@ -171,6 +164,26 @@ export function Pools(): JSX.Element {
   );
   const deleteSchedMut = useMutation((id: string) => deleteScrubSchedule(id));
 
+  /* Import pool state */
+  const [importFormOpen, setImportFormOpen] = useState(false);
+  const [importName, setImportName] = useState("");
+  const [importForce, setImportForce] = useState(false);
+  const importMut = useMutation((args: { name: string; force: boolean }) =>
+    importPool(args.name, args.force),
+  );
+
+  /* Scrub pause/stop mutations */
+  const scrubPauseMut = useMutation((name: string) => scrubPool(name, "pause"));
+  const scrubStopMut = useMutation((name: string) => scrubPool(name, "stop"));
+  const [pausingPool, setPausingPool] = useState<string | null>(null);
+  const [stoppingPool, setStoppingPool] = useState<string | null>(null);
+
+  /* Pool history state */
+  const [historyPool, setHistoryPool] = useState<string | null>(null);
+  const [historyLines, setHistoryLines] = useState<string[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
   /* Pool wizard */
   const [wizardOpen, setWizardOpen] = useState(false);
 
@@ -183,7 +196,9 @@ export function Pools(): JSX.Element {
   /* Handlers */
   const handleScrub = useCallback(
     async (name: string) => {
+      setScrubbing(name);
       const result = await scrubMut.execute(name);
+      setScrubbing(null);
       if (result) {
         addToast("success", `Scrub started on ${name}`);
         refetch();
@@ -196,7 +211,9 @@ export function Pools(): JSX.Element {
 
   const handleTrim = useCallback(
     async (name: string) => {
+      setTrimming(name);
       const result = await trimMut.execute(name);
+      setTrimming(null);
       if (result) {
         addToast("success", `Trim started on ${name}`);
         refetch();
@@ -266,6 +283,77 @@ export function Pools(): JSX.Element {
     setSelectedPool((prev) => (prev === name ? null : name));
   }, []);
 
+  const handleImportPool = useCallback(async () => {
+    if (!importName.trim()) return;
+    const result = await importMut.execute({ name: importName.trim(), force: importForce });
+    if (result) {
+      addToast("success", `Pool "${importName.trim()}" imported successfully`);
+      setImportFormOpen(false);
+      setImportName("");
+      setImportForce(false);
+      refetch();
+    } else if (importMut.error) {
+      addToast("error", importMut.error);
+    }
+  }, [importName, importForce, importMut, addToast, refetch]);
+
+  const handleScrubPause = useCallback(
+    async (name: string) => {
+      setPausingPool(name);
+      const result = await scrubPauseMut.execute(name);
+      setPausingPool(null);
+      if (result) {
+        addToast("success", `Scrub paused on ${name}`);
+        refetch();
+      } else if (scrubPauseMut.error) {
+        addToast("error", scrubPauseMut.error);
+      }
+    },
+    [scrubPauseMut, refetch, addToast],
+  );
+
+  const handleScrubStop = useCallback(
+    async (name: string) => {
+      setStoppingPool(name);
+      const result = await scrubStopMut.execute(name);
+      setStoppingPool(null);
+      if (result) {
+        addToast("success", `Scrub stopped on ${name}`);
+        refetch();
+      } else if (scrubStopMut.error) {
+        addToast("error", scrubStopMut.error);
+      }
+    },
+    [scrubStopMut, refetch, addToast],
+  );
+
+  const handleFetchHistory = useCallback(
+    async (poolName: string) => {
+      if (historyPool === poolName) {
+        setHistoryPool(null);
+        setHistoryLines(null);
+        setHistoryError(null);
+        return;
+      }
+      setHistoryPool(poolName);
+      setHistoryLoading(true);
+      setHistoryError(null);
+      setHistoryLines(null);
+      try {
+        const data = await getPoolHistory(poolName);
+        setHistoryLines(data.history);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to fetch pool history";
+        setHistoryError(message);
+        addToast("error", message);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [historyPool, addToast],
+  );
+
   /* ---------- Render ---------- */
 
   if (loading) {
@@ -295,8 +383,66 @@ export function Pools(): JSX.Element {
           <button className={css.btnPrimary} onClick={() => setWizardOpen(true)}>
             <Plus size={14} /> Create Pool
           </button>
+          <button
+            className={css.btnGhost}
+            onClick={() => setImportFormOpen((prev) => !prev)}
+          >
+            <Download size={14} /> Import Pool
+          </button>
         </div>
       </div>
+
+      {/* Import pool inline form */}
+      {importFormOpen && (
+        <div
+          className={css.card}
+          style={{ marginBottom: "var(--space-4)" }}
+        >
+          <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)" }}>
+            Import Pool
+          </div>
+          <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              className={css.select}
+              type="text"
+              placeholder="Pool name"
+              value={importName}
+              onChange={(e) => setImportName(e.target.value)}
+              style={{ flex: 1, minWidth: 200 }}
+            />
+            <label style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", fontSize: "var(--text-sm)" }}>
+              <input
+                type="checkbox"
+                checked={importForce}
+                onChange={(e) => setImportForce(e.target.checked)}
+              />
+              Force
+            </label>
+            <button
+              className={css.btnPrimary}
+              onClick={handleImportPool}
+              disabled={importMut.loading || !importName.trim()}
+            >
+              {importMut.loading ? "Importing..." : "Import"}
+            </button>
+            <button
+              className={css.btnGhost}
+              onClick={() => {
+                setImportFormOpen(false);
+                setImportName("");
+                setImportForce(false);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+          {importMut.error && (
+            <div className={css.error} style={{ marginTop: "var(--space-2)" }}>
+              {importMut.error}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Mutation-level errors */}
       {scrubMut.error && <div className={css.error}>{scrubMut.error}</div>}
@@ -336,7 +482,7 @@ export function Pools(): JSX.Element {
                   <h3 className={css.cardTitle} style={{ margin: 0 }}>
                     {pool.name}
                   </h3>
-                  <span className={healthBadge(pool.health)}>{pool.health}</span>
+                  <span className={healthBadgeClass(pool.health, css)}>{pool.health}</span>
                 </div>
 
                 {/* Stats row */}
@@ -420,18 +566,44 @@ export function Pools(): JSX.Element {
                   <button
                     className={css.btnGhost}
                     onClick={() => handleScrub(pool.name)}
-                    disabled={scrubMut.loading}
+                    disabled={scrubbing === pool.name}
+                    title="Verify data integrity by reading all data and checking checksums"
                   >
                     <RefreshCw size={12} />
-                    {scrubMut.loading ? "Scrubbing..." : "Scrub"}
+                    {scrubbing === pool.name ? "Scrubbing..." : "Scrub"}
                   </button>
+                  {selectedPool === pool.name &&
+                    poolDetail?.status?.scan &&
+                    /scrub in progress/i.test(poolDetail.status.scan) && (
+                    <>
+                      <button
+                        className={css.btnGhost}
+                        onClick={() => handleScrubPause(pool.name)}
+                        disabled={pausingPool === pool.name}
+                        title="Pause the running scrub"
+                      >
+                        <Pause size={12} />
+                        {pausingPool === pool.name ? "Pausing..." : "Pause Scrub"}
+                      </button>
+                      <button
+                        className={css.btnGhost}
+                        onClick={() => handleScrubStop(pool.name)}
+                        disabled={stoppingPool === pool.name}
+                        title="Stop the running scrub"
+                      >
+                        <Square size={12} />
+                        {stoppingPool === pool.name ? "Stopping..." : "Stop Scrub"}
+                      </button>
+                    </>
+                  )}
                   <button
                     className={css.btnGhost}
                     onClick={() => handleTrim(pool.name)}
-                    disabled={trimMut.loading}
+                    disabled={trimming === pool.name}
+                    title="Reclaim unused space on SSDs (not needed for HDDs)"
                   >
                     <Scissors size={12} />
-                    {trimMut.loading ? "Trimming..." : "Trim"}
+                    {trimming === pool.name ? "Trimming..." : "Trim"}
                   </button>
                   <button
                     className={css.btnGhost}
@@ -607,6 +779,7 @@ export function Pools(): JSX.Element {
           {detailError && <div className={css.error}>{detailError}</div>}
 
           {poolDetail && (
+            <>
             <div className={css.grid2}>
               {/* Device tree */}
               <div className={css.card}>
@@ -649,6 +822,60 @@ export function Pools(): JSX.Element {
                 <PropertyPanel properties={poolDetail.properties} />
               </div>
             </div>
+
+            {/* History button and panel */}
+            <div style={{ marginTop: "var(--space-4)" }}>
+              <button
+                className={css.btnGhost}
+                onClick={() => { if (selectedPool) handleFetchHistory(selectedPool); }}
+                disabled={historyLoading}
+              >
+                <History size={14} />
+                {historyLoading
+                  ? "Loading History..."
+                  : historyPool === selectedPool
+                    ? "Hide History"
+                    : "History"}
+              </button>
+
+              {historyPool === selectedPool && historyError && (
+                <div className={css.error} style={{ marginTop: "var(--space-2)" }}>
+                  {historyError}
+                </div>
+              )}
+
+              {historyPool === selectedPool && historyLines && (
+                <div className={css.card} style={{ marginTop: "var(--space-3)" }}>
+                  <h2 className={css.cardTitle}>
+                    <History size={14} /> Pool History
+                  </h2>
+                  <div
+                    style={{
+                      maxHeight: 400,
+                      overflowY: "auto",
+                      background: "var(--color-bg-surface)",
+                      borderRadius: "var(--radius-sm)",
+                      padding: "var(--space-3)",
+                    }}
+                  >
+                    <pre
+                      className={css.mono}
+                      style={{
+                        margin: 0,
+                        fontSize: "var(--text-xs)",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-all",
+                      }}
+                    >
+                      {historyLines.length === 0
+                        ? "No history available."
+                        : historyLines.join("\n")}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+            </>
           )}
         </div>
       )}

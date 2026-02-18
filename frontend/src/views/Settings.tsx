@@ -55,7 +55,7 @@ export function Settings() {
   return (
     <div>
       <div className={s.header}>
-        <h1 className={s.title}>Settings</h1>
+        <h1 className={s.title}>System</h1>
         <div className={s.actions}>
           <button className={s.btnGhost} onClick={handleRefreshAll}>
             <RefreshCw size={14} /> Refresh All

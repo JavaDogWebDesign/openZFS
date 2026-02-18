@@ -2,13 +2,14 @@
 
 import asyncio
 import logging
+import os
 import shutil
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, Request, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,10 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from exceptions import ZFSError
 from models import LoginRequest
 from services.cmd import ValidationError
-from middleware.auth import login, logout, get_current_user
+from middleware.auth import check_rate_limit, login, logout, get_current_user
 from routes import pools, datasets, snapshots, replication, system
 from ws import router as ws_router
-from db import close_db, list_scrub_schedules, update_scrub_schedule
+from db import cleanup_sessions, close_db, list_scrub_schedules, update_scrub_schedule
 from services import zpool
 
 logger = logging.getLogger(__name__)
@@ -31,9 +32,10 @@ app = FastAPI(
 )
 
 # CORS for dev (Vite on :5173 → backend on :8080)
+cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -120,6 +122,15 @@ async def scrub_scheduler() -> None:
             logger.exception("Scrub scheduler: unexpected error")
 
 
+async def session_cleanup_task():
+    while True:
+        await asyncio.sleep(3600)
+        try:
+            await cleanup_sessions()
+        except Exception:
+            pass
+
+
 @app.on_event("startup")
 async def startup() -> None:
     """Verify ZFS tools are available at startup."""
@@ -142,7 +153,10 @@ async def startup() -> None:
     logger.info("ZFS tools found: zfs=%s, zpool=%s", zfs_path, zpool_path)
 
     # Start background scrub scheduler
-    asyncio.create_task(scrub_scheduler())
+    app.state.scrub_task = asyncio.create_task(scrub_scheduler())
+
+    # Start background session cleanup task
+    app.state.cleanup_task = asyncio.create_task(session_cleanup_task())
 
 
 @app.on_event("shutdown")
@@ -155,6 +169,8 @@ async def shutdown() -> None:
 
 @app.post("/api/auth/login")
 async def auth_login(body: LoginRequest, response: Response):
+    if not check_rate_limit(body.username):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
     return await login(body.username, body.password, response)
 
 

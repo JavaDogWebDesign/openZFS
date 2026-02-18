@@ -1,6 +1,6 @@
 """Snapshot management API routes."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from middleware.auth import get_current_user
 from models import (
@@ -35,7 +35,7 @@ async def create_snapshot(dataset: str, body: SnapshotCreateRequest, user: dict 
 async def destroy_snapshot(snapshot: str, body: SnapshotDestroyRequest, user: dict = Depends(get_current_user)):
     """Destroy a snapshot. Requires confirmation."""
     if body.confirm != snapshot:
-        return {"error": "Confirmation does not match snapshot name"}, 400
+        raise HTTPException(status_code=400, detail="Confirmation does not match snapshot name")
     await zfs.destroy(snapshot, recursive=body.recursive)
     await audit_log(user["username"], "snapshot.destroy", snapshot)
     return {"message": f"Snapshot {snapshot} destroyed"}
@@ -45,7 +45,7 @@ async def destroy_snapshot(snapshot: str, body: SnapshotDestroyRequest, user: di
 async def rollback_snapshot(snapshot: str, body: RollbackRequest, user: dict = Depends(get_current_user)):
     """Rollback a dataset to a snapshot. DESTRUCTIVE."""
     if body.confirm != snapshot:
-        return {"error": "Confirmation does not match snapshot name"}, 400
+        raise HTTPException(status_code=400, detail="Confirmation does not match snapshot name")
     await zfs.rollback(snapshot, destroy_newer=body.destroy_newer, force=body.force)
     await audit_log(user["username"], "snapshot.rollback", snapshot)
     return {"message": f"Rolled back to {snapshot}"}

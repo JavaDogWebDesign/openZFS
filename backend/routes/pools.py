@@ -1,6 +1,6 @@
 """Pool management API routes."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from middleware.auth import get_current_user
 from models import (
@@ -66,7 +66,7 @@ async def update_schedule(
     """Update a scrub schedule."""
     existing = await get_scrub_schedule(schedule_id)
     if not existing:
-        return {"error": "Schedule not found"}
+        raise HTTPException(status_code=404, detail="Schedule not found")
     updates = body.model_dump(exclude_none=True)
     if "enabled" in updates:
         updates["enabled"] = int(updates["enabled"])
@@ -80,7 +80,7 @@ async def delete_schedule(schedule_id: str, user: dict = Depends(get_current_use
     """Delete a scrub schedule."""
     existing = await get_scrub_schedule(schedule_id)
     if not existing:
-        return {"error": "Schedule not found"}
+        raise HTTPException(status_code=404, detail="Schedule not found")
     await db_delete_scrub_schedule(schedule_id)
     await audit_log(user["username"], "scrub.schedule.delete", existing["pool"])
     return {"message": "Schedule deleted"}
@@ -113,7 +113,7 @@ async def create_pool(body: PoolCreateRequest, user: dict = Depends(get_current_
 async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends(get_current_user)):
     """Destroy a pool. Requires confirmation."""
     if body.confirm != pool:
-        return {"error": "Confirmation does not match pool name"}, 400
+        raise HTTPException(status_code=400, detail="Confirmation does not match pool name")
     await zpool.destroy_pool(pool, force=body.force)
     await audit_log(user["username"], "pool.destroy", pool)
     return {"message": f"Pool {pool} destroyed"}

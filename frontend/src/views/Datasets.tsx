@@ -1,9 +1,11 @@
 import { FormEvent, useCallback, useMemo, useState } from "react";
 import {
+  Check,
   Database,
   FolderOpen,
   FolderClosed,
   HardDrive,
+  Pencil,
   Plus,
   Share2,
   Trash2,
@@ -18,12 +20,14 @@ import {
   mountDataset,
   unmountDataset,
   shareDataset,
+  setDatasetProperties,
   type DatasetSummary,
   type PoolSummary,
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/Toast";
+import { formatBytes } from "@/lib/format";
 import styles from "@/styles/views.module.css";
 
 interface DatasetProperties {
@@ -72,6 +76,37 @@ const DISPLAY_PROPS = [
   "secondarycache",
 ] as const;
 
+const EDITABLE_PROPS = new Set([
+  "compression",
+  "quota",
+  "reservation",
+  "recordsize",
+  "atime",
+  "relatime",
+  "checksum",
+  "dedup",
+  "readonly",
+  "canmount",
+  "snapdir",
+  "primarycache",
+  "secondarycache",
+  "sharenfs",
+  "sharesmb",
+]);
+
+const PROP_OPTIONS: Record<string, string[]> = {
+  compression: ["on", "off", "lz4", "gzip", "zstd", "lzjb", "zle"],
+  atime: ["on", "off"],
+  relatime: ["on", "off"],
+  checksum: ["on", "off", "fletcher2", "fletcher4", "sha256", "sha512", "skein"],
+  dedup: ["on", "off", "verify"],
+  readonly: ["on", "off"],
+  canmount: ["on", "off", "noauto"],
+  snapdir: ["hidden", "visible"],
+  primarycache: ["all", "none", "metadata"],
+  secondarycache: ["all", "none", "metadata"],
+};
+
 function getDepth(name: string): number {
   return (name.match(/\//g) || []).length;
 }
@@ -84,6 +119,8 @@ export function Datasets() {
   const [destroyTarget, setDestroyTarget] = useState<string | null>(null);
   const [shareTarget, setShareTarget] = useState<string | null>(null);
   const [shareProtocol, setShareProtocol] = useState<"nfs" | "smb">("nfs");
+  const [editingProp, setEditingProp] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
 
   // --- Data fetching ---
 
@@ -140,6 +177,10 @@ export function Datasets() {
   const shareMut = useMutation(
     (name: string, protocol: "nfs" | "smb") => shareDataset(name, protocol),
   );
+  const setPropMut = useMutation(
+    (name: string, prop: string, val: string) =>
+      setDatasetProperties(name, { [prop]: val }),
+  );
 
   const { addToast } = useToast();
 
@@ -193,28 +234,52 @@ export function Datasets() {
     if (!selectedDataset) return;
     const result = await mountMut.execute(selectedDataset);
     if (result) {
+      addToast("success", `Dataset ${selectedDataset} mounted`);
       refetchProps();
       refetchDatasets();
     }
-  }, [selectedDataset, mountMut, refetchProps, refetchDatasets]);
+  }, [selectedDataset, mountMut, refetchProps, refetchDatasets, addToast]);
 
   const handleUnmount = useCallback(async () => {
     if (!selectedDataset) return;
     const result = await unmountMut.execute(selectedDataset);
     if (result) {
+      addToast("success", `Dataset ${selectedDataset} unmounted`);
       refetchProps();
       refetchDatasets();
     }
-  }, [selectedDataset, unmountMut, refetchProps, refetchDatasets]);
+  }, [selectedDataset, unmountMut, refetchProps, refetchDatasets, addToast]);
 
   const handleShare = useCallback(async () => {
     if (!shareTarget) return;
     const result = await shareMut.execute(shareTarget, shareProtocol);
     if (result) {
+      addToast("success", `Dataset ${shareTarget} shared via ${shareProtocol.toUpperCase()}`);
       setShareTarget(null);
       refetchProps();
     }
-  }, [shareTarget, shareProtocol, shareMut, refetchProps]);
+  }, [shareTarget, shareProtocol, shareMut, refetchProps, addToast]);
+
+  const handleSaveProp = useCallback(async () => {
+    if (!selectedDataset || !editingProp) return;
+    const result = await setPropMut.execute(selectedDataset, editingProp, editValue);
+    if (result) {
+      addToast("success", `Property "${editingProp}" updated to "${editValue}"`);
+      setEditingProp(null);
+      setEditValue("");
+      refetchProps();
+    }
+  }, [selectedDataset, editingProp, editValue, setPropMut, addToast, refetchProps]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingProp(null);
+    setEditValue("");
+  }, []);
+
+  const handleStartEdit = useCallback((prop: string, currentValue: string) => {
+    setEditingProp(prop);
+    setEditValue(currentValue);
+  }, []);
 
   // --- Render helpers ---
 
@@ -284,6 +349,9 @@ export function Datasets() {
                 required
                 autoFocus
               />
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                Full path including pool, e.g. tank/mydata. Child datasets inherit properties from parents.
+              </div>
             </div>
 
             <div style={{ marginBottom: "var(--space-3)" }}>
@@ -314,6 +382,9 @@ export function Datasets() {
                 <option value="lzjb">lzjb</option>
                 <option value="zle">zle</option>
               </select>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                lz4 is recommended for most workloads. zstd offers better compression at slightly higher CPU cost.
+              </div>
             </div>
 
             <div className={styles.grid2}>
@@ -337,6 +408,9 @@ export function Datasets() {
                   }
                   placeholder="e.g. 10G"
                 />
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                  Maximum space this dataset can consume. Leave blank for no limit. Examples: 10G, 500M, 1T
+                </div>
               </div>
 
               <div style={{ marginBottom: "var(--space-3)" }}>
@@ -362,6 +436,9 @@ export function Datasets() {
                   }
                   placeholder="e.g. 5G"
                 />
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                  Guaranteed space reserved for this dataset. Other datasets cannot use this space. Leave blank for no reservation.
+                </div>
               </div>
             </div>
 
@@ -385,6 +462,9 @@ export function Datasets() {
                 }
                 placeholder="/mnt/data (optional)"
               />
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                Where the dataset will be accessible in the filesystem. Leave blank to use the default (/pool/dataset).
+              </div>
             </div>
 
             <div className={styles.actions} style={{ justifyContent: "flex-end" }}>
@@ -515,19 +595,19 @@ export function Datasets() {
               <div className={styles.stat}>
                 <div className={styles.statLabel}>Used</div>
                 <div className={styles.statValue}>
-                  {selectedSummary?.used ?? properties.used?.value ?? "-"}
+                  {formatBytes(Number(selectedSummary?.used ?? properties.used?.value ?? 0))}
                 </div>
               </div>
               <div className={styles.stat}>
                 <div className={styles.statLabel}>Available</div>
                 <div className={styles.statValue}>
-                  {selectedSummary?.avail ?? properties.available?.value ?? "-"}
+                  {formatBytes(Number(selectedSummary?.avail ?? properties.available?.value ?? 0))}
                 </div>
               </div>
               <div className={styles.stat}>
                 <div className={styles.statLabel}>Referenced</div>
                 <div className={styles.statValue}>
-                  {selectedSummary?.refer ?? properties.referenced?.value ?? "-"}
+                  {formatBytes(Number(selectedSummary?.refer ?? properties.referenced?.value ?? 0))}
                 </div>
               </div>
               <div className={styles.stat}>
@@ -583,6 +663,9 @@ export function Datasets() {
                 {DISPLAY_PROPS.map((prop) => {
                   const entry = properties[prop];
                   if (!entry) return null;
+                  const isEditable = EDITABLE_PROPS.has(prop);
+                  const isEditing = editingProp === prop;
+                  const hasOptions = prop in PROP_OPTIONS;
                   return (
                     <tr
                       key={prop}
@@ -598,7 +681,67 @@ export function Datasets() {
                         className={styles.mono}
                         style={{ padding: "var(--space-2)" }}
                       >
-                        {entry.value}
+                        {isEditing ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                            {hasOptions ? (
+                              <select
+                                className={styles.select}
+                                style={{ flex: 1, fontSize: "var(--text-sm)" }}
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                autoFocus
+                              >
+                                {PROP_OPTIONS[prop].map((opt) => (
+                                  <option key={opt} value={opt}>{opt}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                className={styles.select}
+                                style={{ flex: 1, fontSize: "var(--text-sm)", boxSizing: "border-box" }}
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSaveProp();
+                                  if (e.key === "Escape") handleCancelEdit();
+                                }}
+                                autoFocus
+                              />
+                            )}
+                            <button
+                              className={styles.btnGhost}
+                              style={{ padding: "2px 4px", lineHeight: 1 }}
+                              onClick={handleSaveProp}
+                              disabled={setPropMut.loading}
+                              title="Save"
+                            >
+                              <Check size={14} />
+                            </button>
+                            <button
+                              className={styles.btnGhost}
+                              style={{ padding: "2px 4px", lineHeight: 1 }}
+                              onClick={handleCancelEdit}
+                              disabled={setPropMut.loading}
+                              title="Cancel"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                            <span>{entry.value}</span>
+                            {isEditable && (
+                              <button
+                                className={styles.btnGhost}
+                                style={{ padding: "2px 4px", lineHeight: 1, opacity: 0.5 }}
+                                onClick={() => handleStartEdit(prop, entry.value)}
+                                title={`Edit ${prop}`}
+                              >
+                                <Pencil size={12} />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: "var(--space-2)" }}>
                         <span className={styles.badgeMuted}>{entry.source}</span>
@@ -651,9 +794,9 @@ export function Datasets() {
               </button>
             </div>
 
-            {(mountMut.error || unmountMut.error) && (
+            {(mountMut.error || unmountMut.error || setPropMut.error) && (
               <div className={styles.error} style={{ marginTop: "var(--space-3)" }}>
-                {mountMut.error || unmountMut.error}
+                {mountMut.error || unmountMut.error || setPropMut.error}
               </div>
             )}
           </>
@@ -844,7 +987,7 @@ export function Datasets() {
                         textAlign: "right",
                       }}
                     >
-                      {ds.used}
+                      {formatBytes(Number(ds.used))}
                     </td>
                     <td
                       className={styles.mono}
@@ -853,7 +996,7 @@ export function Datasets() {
                         textAlign: "right",
                       }}
                     >
-                      {ds.avail}
+                      {formatBytes(Number(ds.avail))}
                     </td>
                     <td
                       className={styles.mono}
@@ -862,7 +1005,7 @@ export function Datasets() {
                         textAlign: "right",
                       }}
                     >
-                      {ds.refer}
+                      {formatBytes(Number(ds.refer))}
                     </td>
                     <td
                       className={styles.mono}

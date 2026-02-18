@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AreaChart,
   Area,
@@ -9,7 +9,14 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { Activity, Wifi, WifiOff } from "lucide-react";
-import { useWebSocket } from "@/hooks/useWebSocket";
+import {
+  connectPool,
+  getHistory,
+  isConnected as storeIsConnected,
+  getError as storeGetError,
+  subscribe,
+  type DataPoint,
+} from "@/lib/iostat-store";
 import styles from "./IoChart.module.css";
 
 /* -- Constants -------------------------------------------------- */
@@ -25,23 +32,7 @@ const TIME_RANGES = [
 const READ_COLOR = "#5b9cf5"; // accent blue
 const WRITE_COLOR = "#c084fc"; // purple
 
-/* -- Types ------------------------------------------------------ */
-
-interface IoStatMessage {
-  read_iops: number;
-  write_iops: number;
-  read_bw: number; // bytes per second
-  write_bw: number; // bytes per second
-  timestamp?: number;
-}
-
-interface DataPoint {
-  time: string;
-  readIops: number;
-  writeIops: number;
-  readBw: number;
-  writeBw: number;
-}
+/* -- Props ------------------------------------------------------ */
 
 interface IoChartProps {
   pool: string;
@@ -62,15 +53,6 @@ function formatBandwidth(bytes: number): string {
   if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB/s`;
   if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB/s`;
   return `${Math.round(bytes)} B/s`;
-}
-
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
 }
 
 function formatAxisBw(bytes: number): string {
@@ -118,47 +100,24 @@ function ChartTooltip({ active, payload, label, formatter }: CustomTooltipProps)
 /* -- Main Component --------------------------------------------- */
 
 export function IoChart({ pool, pools, onPoolChange }: IoChartProps) {
-  const [history, setHistory] = useState<DataPoint[]>([]);
-  const historyRef = useRef<DataPoint[]>([]);
-  const [timeRangeIdx, setTimeRangeIdx] = useState(0); // default 1m
+  const [timeRangeIdx, setTimeRangeIdx] = useState(0);
+  const [, setTick] = useState(0); // force re-render on store changes
 
   const maxPoints = TIME_RANGES[timeRangeIdx].seconds;
 
-  const { data, isConnected, error } = useWebSocket<IoStatMessage>({
-    url: `/api/ws/iostat?pool=${encodeURIComponent(pool)}`,
-  });
-
-  /* Append incoming data to rolling window */
-  const appendData = useCallback((msg: IoStatMessage) => {
-    const now = new Date();
-    const point: DataPoint = {
-      time: formatTime(now),
-      readIops: msg.read_iops,
-      writeIops: msg.write_iops,
-      readBw: msg.read_bw,
-      writeBw: msg.write_bw,
-    };
-
-    // Keep the full history (up to 1h) and slice for display
-    const next = [...historyRef.current, point].slice(-3600);
-    historyRef.current = next;
-    setHistory(next);
-  }, []);
-
+  /* Connect to the store and subscribe for updates */
   useEffect(() => {
-    if (data) {
-      appendData(data);
-    }
-  }, [data, appendData]);
-
-  /* Reset history when pool changes */
-  useEffect(() => {
-    historyRef.current = [];
-    setHistory([]);
+    connectPool(pool);
+    return subscribe(() => setTick((n) => n + 1));
   }, [pool]);
 
+  /* Read from the persistent store */
+  const history = getHistory(pool);
+  const isConnected = storeIsConnected();
+  const error = storeGetError();
+
   /* Slice displayed data based on time range */
-  const displayData = history.slice(-maxPoints);
+  const displayData: DataPoint[] = history.slice(-maxPoints);
 
   /* Derive current values from the latest data point */
   const latest = displayData.length > 0 ? displayData[displayData.length - 1] : null;
@@ -210,6 +169,11 @@ export function IoChart({ pool, pools, onPoolChange }: IoChartProps) {
           <StatusIcon size={14} />
           <span className={`${styles.statusDot} ${statusDotClass}`} />
           <span className={styles.statusLabel}>{statusText}</span>
+          {history.length > 0 && (
+            <span style={{ color: "var(--color-text-dim)", fontSize: "var(--text-xs)" }}>
+              ({history.length}s collected)
+            </span>
+          )}
           {error && <span className={styles.errorText}>{error}</span>}
         </div>
 

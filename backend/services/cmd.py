@@ -9,6 +9,8 @@ import asyncio
 import logging
 import re
 
+from exceptions import ZFSError
+
 logger = logging.getLogger(__name__)
 
 # Limit concurrent ZFS subprocess calls (zpool status, zfs list, etc. are expensive)
@@ -114,5 +116,10 @@ async def run_cmd(cmd: list[str]) -> tuple[str, str, int]:
             binary = cmd[0] if cmd else "(empty)"
             logger.error("Command not found: %s", binary)
             return "", f"{binary}: command not found", 127
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise ZFSError("Command timed out after 300 seconds")
         return stdout.decode(), stderr.decode(), proc.returncode

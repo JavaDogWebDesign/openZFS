@@ -1,6 +1,6 @@
 """Dataset management API routes."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from middleware.auth import get_current_user
 from models import (
@@ -51,7 +51,7 @@ async def create_dataset(body: DatasetCreateRequest, user: dict = Depends(get_cu
 async def destroy_dataset(name: str, body: DatasetDestroyRequest, user: dict = Depends(get_current_user)):
     """Destroy a dataset. Requires confirmation."""
     if body.confirm != name:
-        return {"error": "Confirmation does not match dataset name"}, 400
+        raise HTTPException(status_code=400, detail="Confirmation does not match dataset name")
     await zfs.destroy(name, recursive=body.recursive, force=body.force)
     await audit_log(user["username"], "dataset.destroy", name)
     return {"message": f"Dataset {name} destroyed"}
@@ -100,8 +100,11 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
 
 @router.post("/{name:path}/unshare")
 async def unshare_dataset(name: str, user: dict = Depends(get_current_user)):
-    """Unshare a dataset."""
-    await zfs.unshare(name)
+    """Unshare a dataset by resetting sharenfs and sharesmb to off."""
+    # Reset share properties — this also unshares the dataset
+    await zfs.set_property(name, "sharenfs", "off")
+    await zfs.set_property(name, "sharesmb", "off")
+    await audit_log(user["username"], "dataset.unshare", name)
     return {"message": f"Dataset {name} unshared"}
 
 

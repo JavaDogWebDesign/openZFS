@@ -12,7 +12,6 @@ import {
   Share2,
   Lock,
   Unlock,
-  Key,
   RefreshCw,
   FolderOpen,
   Shield,
@@ -88,8 +87,6 @@ export function Sharing() {
   const [encryptionDetails, setEncryptionDetails] = useState<EncryptionInfo[]>([]);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
-  const [newKeyDataset, setNewKeyDataset] = useState("");
-  const [newKeyValue, setNewKeyValue] = useState("");
 
   // New share form — controlled state
   const [newShareDataset, setNewShareDataset] = useState("");
@@ -435,7 +432,7 @@ export function Sharing() {
                   placeholder="* (all hosts)"
                 />
                 <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: 2 }}>
-                  IP, subnet (10.0.0.0/24), or * for all
+                  Which clients can access this share. Use * for all hosts, a specific IP (192.168.1.10), or a subnet (10.0.0.0/24).
                 </div>
               </div>
               <div>
@@ -453,6 +450,9 @@ export function Sharing() {
                   <option value="rw">Read/Write</option>
                   <option value="ro">Read Only</option>
                 </select>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: 2 }}>
+                  Read/Write allows clients to modify files. Read Only limits clients to viewing files only.
+                </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
@@ -464,7 +464,7 @@ export function Sharing() {
                   no_root_squash
                 </label>
                 <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)" }}>
-                  Allow root access from clients
+                  By default, NFS maps remote root users to an unprivileged user (nobody) for security. Enable this to let remote root users retain full root privileges on the share. Use with caution.
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
@@ -476,7 +476,10 @@ export function Sharing() {
                   />
                   Synchronous writes
                 </label>
-                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)" }}>
+                  Sync mode writes data to disk before acknowledging the client, ensuring data safety at the cost of performance. Async mode is faster but risks data loss on server crash.
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer", marginTop: "var(--space-1)" }}>
                   <input
                     type="checkbox"
                     checked={nfsOpts.noSubtreeCheck}
@@ -484,41 +487,59 @@ export function Sharing() {
                   />
                   no_subtree_check
                 </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)" }}>
+                  Disables checking that accessed files are within the exported directory tree. Improves reliability when files are renamed while a client has them open. Recommended for most ZFS shares.
+                </div>
               </div>
             </div>
           ) : (
             <div
               style={{
-                display: "flex",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr 1fr",
                 gap: "var(--space-4)",
                 marginBottom: "var(--space-3)",
-                flexWrap: "wrap",
               }}
             >
-              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={smbOpts.guestOk}
-                  onChange={(e) => setSmbOpts((o) => ({ ...o, guestOk: e.target.checked }))}
-                />
-                Guest Access
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={smbOpts.readOnly}
-                  onChange={(e) => setSmbOpts((o) => ({ ...o, readOnly: e.target.checked }))}
-                />
-                Read Only
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={smbOpts.browseable}
-                  onChange={(e) => setSmbOpts((o) => ({ ...o, browseable: e.target.checked }))}
-                />
-                Browseable
-              </label>
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={smbOpts.guestOk}
+                    onChange={(e) => setSmbOpts((o) => ({ ...o, guestOk: e.target.checked }))}
+                  />
+                  Guest Access
+                </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
+                  Allow access without a username or password. Useful for open file drops or media shares on a trusted network.
+                </div>
+              </div>
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={smbOpts.readOnly}
+                    onChange={(e) => setSmbOpts((o) => ({ ...o, readOnly: e.target.checked }))}
+                  />
+                  Read Only
+                </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
+                  Prevent all clients from creating, modifying, or deleting files on this share. Clients can only view and copy files.
+                </div>
+              </div>
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={smbOpts.browseable}
+                    onChange={(e) => setSmbOpts((o) => ({ ...o, browseable: e.target.checked }))}
+                  />
+                  Browseable
+                </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
+                  Make this share visible when browsing the network (e.g. in Windows File Explorer). Hidden shares can still be accessed by typing the full path.
+                </div>
+              </div>
             </div>
           )}
 
@@ -600,9 +621,6 @@ export function Sharing() {
                 <th style={{ padding: "var(--space-2) var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
                   Key Location
                 </th>
-                <th style={{ padding: "var(--space-2) var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
-                  Actions
-                </th>
               </tr>
             </thead>
             <tbody>
@@ -652,98 +670,12 @@ export function Sharing() {
                   >
                     {enc.keylocation}
                   </td>
-                  <td style={{ padding: "var(--space-3)" }}>
-                    <div className={s.actions}>
-                      {enc.keystatus === "available" ? (
-                        <button className={s.btnGhost} title="Unload key">
-                          <Lock size={14} /> Unload
-                        </button>
-                      ) : (
-                        <button className={s.btnPrimary} title="Load key">
-                          <Unlock size={14} /> Load
-                        </button>
-                      )}
-                    </div>
-                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
 
-        {/* Change Encryption Key */}
-        {encryptionDetails.length > 0 && (
-          <div
-            style={{
-              marginTop: "var(--space-4)",
-              paddingTop: "var(--space-4)",
-              borderTop: "1px solid var(--color-border)",
-            }}
-          >
-            <h3
-              style={{
-                fontSize: "var(--text-sm)",
-                fontWeight: 600,
-                marginBottom: "var(--space-3)",
-              }}
-            >
-              <Key
-                size={14}
-                style={{ marginRight: "var(--space-2)", verticalAlign: "middle" }}
-              />
-              Change Encryption Key
-            </h3>
-            <div
-              style={{
-                display: "flex",
-                gap: "var(--space-3)",
-                alignItems: "flex-end",
-                flexWrap: "wrap",
-              }}
-            >
-              <div>
-                <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
-                  Dataset
-                </label>
-                <select
-                  className={s.select}
-                  value={newKeyDataset}
-                  onChange={(e) => setNewKeyDataset(e.target.value)}
-                >
-                  <option value="">Select dataset...</option>
-                  {encryptionDetails.map((enc) => (
-                    <option key={enc.dataset} value={enc.dataset}>
-                      {enc.dataset}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
-                  New Passphrase
-                </label>
-                <input
-                  className={s.select}
-                  type="password"
-                  value={newKeyValue}
-                  onChange={(e) => setNewKeyValue(e.target.value)}
-                  placeholder="Enter new passphrase"
-                  style={{ minWidth: "250px" }}
-                />
-              </div>
-              <button
-                className={s.btnPrimary}
-                disabled={!newKeyDataset || !newKeyValue}
-                onClick={() => {
-                  // Key change would use a dedicated API endpoint
-                  setNewKeyValue("");
-                }}
-              >
-                <Key size={14} /> Change Key
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

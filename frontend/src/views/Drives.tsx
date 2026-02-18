@@ -2,21 +2,10 @@ import { useMemo } from "react";
 import { RefreshCw, HardDrive, Disc, Thermometer, Clock } from "lucide-react";
 import { listDrivesDetailed, type DriveInfo } from "@/lib/api";
 import { useApi } from "@/hooks/useApi";
+import { formatBytes } from "@/lib/format";
 import css from "@/styles/views.module.css";
 
 /* ---------- Helpers ---------- */
-
-function formatBytes(bytes: number | null): string {
-  if (bytes == null || bytes === 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  let i = 0;
-  let val = bytes;
-  while (val >= 1024 && i < units.length - 1) {
-    val /= 1024;
-    i++;
-  }
-  return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
 
 function formatHours(hours: number | null): string {
   if (hours == null) return "—";
