@@ -158,8 +158,8 @@ fi
 
 # ── 8. Start the service ─────────────────────────────────────────
 
-info "Starting ${SERVICE_NAME}..."
-systemctl start "${SERVICE_NAME}"
+info "Restarting ${SERVICE_NAME}..."
+systemctl restart "${SERVICE_NAME}"
 
 if systemctl is-active --quiet "${SERVICE_NAME}"; then
     ok "${SERVICE_NAME} is running"
