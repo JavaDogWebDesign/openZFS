@@ -117,8 +117,9 @@ async def create_pool(body: PoolCreateRequest, user: dict = Depends(get_current_
 async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends(get_current_user)):
     """Destroy a pool. Requires confirmation.
 
-    Sequence: kill processes → unmount → export (offline) → destroy.
-    A pool must be fully offline (no open handles) before it can be destroyed.
+    Sequence: kill our own iostat subprocesses → kill anything on the
+    mountpoint → ``zpool destroy -f``.  No export/import dance — that
+    added failure modes without solving the core "pool is busy" problem.
     """
     import asyncio
     from services.cmd import run_cmd
@@ -128,28 +129,28 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
 
     logger.info("Starting pool destroy sequence for %s", pool)
 
-    # 1. Close WebSocket connections for this pool
+    # 1. Close WebSocket connections and SIGKILL their iostat subprocesses.
+    #    This is the main fix — the app's own `zpool iostat` subprocess is
+    #    what keeps the pool "busy".
     from ws import stop_pool_streams
     await stop_pool_streams(pool)
 
-    # 2. SIGKILL any zpool subprocesses referencing this pool
-    logger.info("[destroy %s] Killing zpool subprocesses", pool)
-    for pattern in [f"zpool iostat.*{pool}", f"zpool.*{pool}"]:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "pkill", "-9", "-f", pattern,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
-        except Exception:
-            pass
-    await asyncio.sleep(1)
+    # 2. Safety net: pkill any zpool iostat processes for this pool that
+    #    we don't track (e.g. spawned by another client or leftover).
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pkill", "-9", "-f", f"zpool iostat.*{pool}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+    except Exception:
+        pass
 
-    # 3. Kill any processes using the pool's mountpoint
+    # 3. Kill any processes using the pool's mountpoint (user shells, etc.)
     try:
         mp_out, _, mp_rc = await run_cmd(["zfs", "get", "-H", "-o", "value", "mountpoint", pool])
-        if mp_rc == 0 and mp_out.strip() and mp_out.strip() != "-":
+        if mp_rc == 0 and mp_out.strip() and mp_out.strip() not in ("-", "none", "legacy"):
             mountpoint = mp_out.strip()
             logger.info("[destroy %s] Killing processes on mountpoint %s", pool, mountpoint)
             proc = await asyncio.create_subprocess_exec(
@@ -161,61 +162,31 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     except Exception:
         pass
 
-    # 4. Unshare and force-unmount all datasets under this pool
-    logger.info("[destroy %s] Unmounting datasets", pool)
-    for prop in ["sharenfs", "sharesmb"]:
-        try:
-            await run_cmd(["zfs", "set", f"{prop}=off", pool])
-        except Exception:
-            pass
-    try:
-        await run_cmd(["zfs", "unmount", "-f", pool])
-    except Exception:
-        pass
-
-    # 5. Export the pool (take it offline — releases all kernel handles)
-    logger.info("[destroy %s] Exporting pool (taking offline)", pool)
-    try:
-        await zpool.export_pool(pool, force=True)
-    except Exception as e:
-        logger.warning("[destroy %s] Export failed: %s", pool, e)
-
+    # Brief pause for killed processes to fully exit
     await asyncio.sleep(1)
 
-    # 6. Re-import if exported (can't destroy an exported pool directly)
-    logger.info("[destroy %s] Re-importing for destroy", pool)
-    try:
-        await zpool.import_pool(pool)
-    except Exception:
-        pass  # May still be imported if export failed
-
-    # 7. Destroy with retries — kill iostat RIGHT BEFORE each attempt
-    #    because the WebSocket may reconnect and spawn a new process
+    # 4. Destroy with retries
     last_err = None
     for attempt in range(3):
         if attempt > 0:
-            delay = attempt * 3
-            logger.info("[destroy %s] Retry %d, waiting %ds...", pool, attempt + 1, delay)
-            await asyncio.sleep(delay)
-
-        # Kill iostat/events subprocesses immediately before destroy
-        logger.info("[destroy %s] Killing zpool subprocesses (attempt %d)", pool, attempt + 1)
-        try:
-            p = await asyncio.create_subprocess_exec(
-                "pkill", "-9", "-f", f"zpool iostat.*{pool}",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await p.wait()
-        except Exception:
-            pass
-        # Brief pause for process to fully die
-        await asyncio.sleep(0.5)
+            logger.info("[destroy %s] Retry %d …", pool, attempt + 1)
+            await asyncio.sleep(2)
+            # Kill any respawned iostat processes before retrying
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    "pkill", "-9", "-f", f"zpool iostat.*{pool}",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await p.wait()
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
 
         try:
             await zpool.destroy_pool(pool, force=True)
-            last_err = None
             logger.info("[destroy %s] Pool destroyed successfully", pool)
+            last_err = None
             break
         except Exception as e:
             last_err = e
@@ -223,6 +194,8 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
 
     if last_err is not None:
         logger.error("[destroy %s] All attempts failed", pool)
+        from ws import unmark_pool_destroying
+        unmark_pool_destroying(pool)
         raise last_err
 
     await audit_log(user["username"], "pool.destroy", pool)

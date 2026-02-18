@@ -16,6 +16,25 @@ from services.cmd import run_cmd, validate_pool_name
 
 logger = logging.getLogger(__name__)
 
+# Track active iostat subprocesses by pool name so they can be
+# killed directly (SIGKILL) when a pool is about to be destroyed.
+_iostat_procs: dict[str, set[asyncio.subprocess.Process]] = {}
+
+
+async def kill_iostat_procs(pool: str) -> None:
+    """SIGKILL all tracked iostat subprocesses for a pool and wait for them to die."""
+    procs = _iostat_procs.pop(pool, set())
+    for proc in procs:
+        try:
+            proc.kill()  # SIGKILL — immediate, no graceful shutdown
+        except ProcessLookupError:
+            pass
+    for proc in procs:
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+
 
 async def list_pools() -> list[dict[str, Any]]:
     """List all pools using zpool list -Hp."""
@@ -471,6 +490,9 @@ async def iostat_stream(pool: str, interval: int = 1) -> AsyncGenerator[dict[str
     except FileNotFoundError:
         logger.error("zpool command not found — is ZFS installed?")
         return
+
+    # Register so kill_iostat_procs() can reach this process
+    _iostat_procs.setdefault(pool, set()).add(proc)
     try:
         assert proc.stdout is not None
         skip_first = True
@@ -492,7 +514,11 @@ async def iostat_stream(pool: str, interval: int = 1) -> AsyncGenerator[dict[str
                 "write_bw": _to_int(fields[6]) if len(fields) > 6 else 0,
             }
     finally:
-        proc.terminate()
+        _iostat_procs.get(pool, set()).discard(proc)
+        try:
+            proc.kill()  # SIGKILL — immediate
+        except ProcessLookupError:
+            pass  # Already killed by kill_iostat_procs()
         await proc.wait()
 
 

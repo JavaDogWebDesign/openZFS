@@ -30,29 +30,40 @@ _iostat_history: dict[str, deque[dict[str, Any]]] = {}
 # Tracked so we can forcefully close them before pool destroy.
 _active_ws: dict[str, set[WebSocket]] = {}
 
+# Pools currently being destroyed — reject new iostat connections
+# so the frontend's auto-reconnect doesn't re-busy the pool.
+_destroying_pools: set[str] = set()
+
 
 def get_iostat_history(pool: str) -> list[dict[str, Any]]:
     """Return stored iostat history for a pool."""
     return list(_iostat_history.get(pool, []))
 
 
-async def stop_pool_streams(pool: str) -> None:
-    """Close all active WebSocket iostat connections for a pool.
+def unmark_pool_destroying(pool: str) -> None:
+    """Remove the destroy guard so new WebSocket connections are allowed again."""
+    _destroying_pools.discard(pool)
 
-    This kills the underlying `zpool iostat` subprocess, releasing the
-    pool so it can be exported/destroyed without "pool is busy" errors.
+
+async def stop_pool_streams(pool: str) -> None:
+    """Close all active WebSocket iostat connections for a pool and
+    SIGKILL their underlying ``zpool iostat`` subprocesses.
+
+    Called before pool destroy to ensure no process holds the pool open.
     """
-    ws_set = _active_ws.get(pool)
-    if not ws_set:
-        return
-    logger.info("Stopping %d iostat stream(s) for pool %s", len(ws_set), pool)
-    for ws in list(ws_set):
-        try:
-            await ws.close(code=1000, reason="Pool is being destroyed")
-        except Exception:
-            pass
-    # Give the subprocess a moment to terminate
-    await asyncio.sleep(0.5)
+    _destroying_pools.add(pool)
+    ws_set = _active_ws.pop(pool, None)
+    if ws_set:
+        logger.info("Closing %d iostat WebSocket(s) for pool %s", len(ws_set), pool)
+        for ws in list(ws_set):
+            try:
+                await ws.close(code=1000, reason="Pool is being destroyed")
+            except Exception:
+                pass
+
+    # Kill tracked iostat subprocesses directly — don't rely on the
+    # async generator's finally block which depends on timing.
+    await zpool.kill_iostat_procs(pool)
 
 
 async def _ws_authenticate(websocket: WebSocket) -> bool:
@@ -78,6 +89,11 @@ async def ws_iostat(ws: WebSocket, pool: str = ""):
     await ws.accept()
     if not await _ws_authenticate(ws):
         return
+
+    if pool in _destroying_pools:
+        await ws.close(code=1000, reason="Pool is being destroyed")
+        return
+
     logger.info("WebSocket iostat stream started for pool: %s", pool)
 
     # Register this connection so it can be killed before pool destroy
