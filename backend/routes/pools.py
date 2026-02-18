@@ -118,22 +118,19 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     """Destroy a pool. Requires confirmation."""
     if body.confirm != pool:
         raise HTTPException(status_code=400, detail="Confirmation does not match pool name")
-    # Unshare all datasets first — active NFS/SMB shares can block destroy
-    from services import zfs
+    # Export the pool first (forcefully unmounts everything and releases
+    # all handles), then re-import and destroy.  If export fails, fall
+    # through to a direct force-destroy.
     try:
-        ds_list = await zfs.list_datasets(pool=pool)
-        for ds in ds_list:
-            try:
-                await zfs.set_property(ds["name"], "sharenfs", "off")
-            except Exception:
-                pass
-            try:
-                await zfs.set_property(ds["name"], "sharesmb", "off")
-            except Exception:
-                pass
+        await zpool.export_pool(pool, force=True)
     except Exception:
-        pass  # If listing fails, proceed with destroy anyway
+        logger.info("Pool export before destroy failed for %s, trying direct destroy", pool)
     try:
+        # After export the pool is detached — import it back for destroy
+        try:
+            await zpool.import_pool(pool)
+        except Exception:
+            pass  # May already be imported if export failed
         await zpool.destroy_pool(pool, force=body.force)
     except Exception as e:
         logger.error("Pool destroy failed for %s: %s", pool, e)
@@ -169,6 +166,13 @@ async def trim_pool(pool: str, body: TrimRequest, user: dict = Depends(get_curre
 async def get_iostat(pool: str, user: dict = Depends(get_current_user)):
     """Get a single I/O stats sample."""
     return await zpool.get_iostat(pool)
+
+
+@router.get("/{pool}/iostat-history")
+async def get_iostat_history(pool: str, user: dict = Depends(get_current_user)):
+    """Get buffered iostat history (up to 5 min) for pre-populating charts."""
+    from ws import get_iostat_history
+    return get_iostat_history(pool)
 
 
 @router.get("/{pool}/history")

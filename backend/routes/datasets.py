@@ -94,17 +94,38 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
 
     prop = "sharenfs" if body.protocol == "nfs" else "sharesmb"
 
-    # Check that the required sharing service is installed
-    if body.protocol == "nfs" and not shutil.which("exportfs"):
-        raise HTTPException(
-            status_code=400,
-            detail="NFS sharing requires nfs-kernel-server. Install it with: apt install nfs-kernel-server",
+    import subprocess
+
+    # Check that the required sharing service is installed and running
+    if body.protocol == "nfs":
+        if not shutil.which("exportfs"):
+            raise HTTPException(
+                status_code=400,
+                detail="NFS sharing requires nfs-kernel-server. Install with: apt install nfs-kernel-server",
+            )
+        # Check if NFS server is running
+        rc = subprocess.call(
+            ["systemctl", "is-active", "--quiet", "nfs-kernel-server"],
         )
-    if body.protocol == "smb" and not shutil.which("net"):
-        raise HTTPException(
-            status_code=400,
-            detail="SMB sharing requires Samba. Install it with: apt install samba",
+        if rc != 0:
+            raise HTTPException(
+                status_code=400,
+                detail="NFS server is not running. Start it with: systemctl start nfs-kernel-server",
+            )
+    if body.protocol == "smb":
+        if not shutil.which("net"):
+            raise HTTPException(
+                status_code=400,
+                detail="SMB sharing requires Samba. Install with: apt install samba",
+            )
+        rc = subprocess.call(
+            ["systemctl", "is-active", "--quiet", "smbd"],
         )
+        if rc != 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Samba is not running. Start it with: systemctl start smbd",
+            )
 
     # SMB only supports "on"/"off"; NFS supports export options strings
     if body.protocol == "smb":

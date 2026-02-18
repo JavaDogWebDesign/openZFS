@@ -137,9 +137,40 @@ export function connectPool(pool: string): void {
   doConnect();
 }
 
+/**
+ * Disconnect the current WebSocket and stop reconnecting.
+ * Use before pool destroy to release the iostat subprocess.
+ */
+export function disconnect(): void {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectCount = MAX_RECONNECTS; // prevent reconnect
+  if (ws) {
+    const oldWs = ws;
+    ws = null;
+    oldWs.close();
+  }
+  currentPool = "";
+  connected = false;
+  wsError = null;
+  notify();
+}
+
 /** Get accumulated history for a pool (empty array if none). */
 export function getHistory(pool: string): DataPoint[] {
   return historyMap.get(pool) || [];
+}
+
+/**
+ * Seed the history for a pool from server-side buffered data.
+ * Called once on connect to pre-populate charts with historical data.
+ */
+export function seedHistory(pool: string, points: DataPoint[]): void {
+  if (points.length === 0) return;
+  const existing = historyMap.get(pool) || [];
+  if (existing.length === 0) {
+    historyMap.set(pool, points.slice(-MAX_POINTS));
+    notify();
+  }
 }
 
 /** Current pool being monitored. */

@@ -30,6 +30,7 @@ import {
   type PoolDetail,
   type ScrubSchedule,
 } from "@/lib/api";
+import { disconnect as disconnectIostat, getCurrentPool } from "@/lib/iostat-store";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PoolWizard } from "@/components/PoolWizard";
@@ -267,6 +268,13 @@ export function Pools(): JSX.Element {
         addToast("error", exportMut.error);
       }
     } else if (confirmTarget.action === "destroy") {
+      // Disconnect the iostat WebSocket if it's monitoring this pool —
+      // the zpool iostat subprocess keeps the pool "busy"
+      if (getCurrentPool() === confirmTarget.pool) {
+        disconnectIostat();
+        // Give the server a moment to terminate the iostat subprocess
+        await new Promise((r) => setTimeout(r, 500));
+      }
       const result = await destroyMut.execute(confirmTarget.pool);
       if (result) {
         addToast("success", `Pool ${confirmTarget.pool} destroyed`);

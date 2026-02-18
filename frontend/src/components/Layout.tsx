@@ -12,8 +12,8 @@ import {
   Bell,
 } from "lucide-react";
 import clsx from "clsx";
-import { listPools, logout } from "@/lib/api";
-import { connectPool } from "@/lib/iostat-store";
+import { listPools, getIostatHistory, logout } from "@/lib/api";
+import { connectPool, seedHistory, type DataPoint } from "@/lib/iostat-store";
 import { ActivityPanel } from "./ActivityPanel";
 import styles from "./Layout.module.css";
 
@@ -38,11 +38,32 @@ export function Layout({ username, onLogout }: LayoutProps) {
   const [activityOpen, setActivityOpen] = useState(false);
 
   /* Start iostat data collection immediately on login so the Dashboard
-     has historical data even if the user navigates elsewhere first. */
+     has historical data even if the user navigates elsewhere first.
+     Also fetch server-side buffered history to pre-populate charts. */
   useEffect(() => {
     listPools()
-      .then((pools) => {
-        if (pools?.length > 0) connectPool(pools[0].name);
+      .then(async (pools) => {
+        if (!pools?.length) return;
+        const pool = pools[0].name;
+        // Fetch server-side history buffer first
+        try {
+          const samples = await getIostatHistory(pool);
+          if (samples?.length) {
+            const now = new Date();
+            const points: DataPoint[] = samples.map((s, i) => ({
+              time: new Date(now.getTime() - (samples.length - i) * 1000)
+                .toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
+              readIops: s.read_iops,
+              writeIops: s.write_iops,
+              readBw: s.read_bw,
+              writeBw: s.write_bw,
+            }));
+            seedHistory(pool, points);
+          }
+        } catch {
+          /* history endpoint may not exist on older backends */
+        }
+        connectPool(pool);
       })
       .catch(() => {/* Dashboard will retry */});
   }, []);

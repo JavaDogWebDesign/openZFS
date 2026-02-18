@@ -8,6 +8,8 @@
 import asyncio
 import json
 import logging
+from collections import deque
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -17,6 +19,17 @@ from services import zpool
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# --- Server-side iostat history buffer ---
+# Keeps the last 300 samples (5 min at 1 sample/s) per pool so the
+# dashboard can show historical data immediately on page load.
+MAX_HISTORY = 300
+_iostat_history: dict[str, deque[dict[str, Any]]] = {}
+
+
+def get_iostat_history(pool: str) -> list[dict[str, Any]]:
+    """Return stored iostat history for a pool."""
+    return list(_iostat_history.get(pool, []))
 
 
 async def _ws_authenticate(websocket: WebSocket) -> bool:
@@ -46,6 +59,10 @@ async def ws_iostat(ws: WebSocket, pool: str = ""):
 
     try:
         async for sample in zpool.iostat_stream(pool, interval=1):
+            # Store in server-side history buffer
+            if pool not in _iostat_history:
+                _iostat_history[pool] = deque(maxlen=MAX_HISTORY)
+            _iostat_history[pool].append(sample)
             await ws.send_json(sample)
     except WebSocketDisconnect:
         logger.info("WebSocket iostat client disconnected (pool: %s)", pool)

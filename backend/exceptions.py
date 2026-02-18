@@ -81,6 +81,8 @@ _ERROR_PATTERNS: list[tuple[re.Pattern[str], type[ZFSError]]] = [
     (re.compile(r"bad property value", re.IGNORECASE), ZFSInvalidArgumentError),
     (re.compile(r"invalid vdev specification", re.IGNORECASE), ZFSInvalidArgumentError),
     (re.compile(r"invalid option", re.IGNORECASE), ZFSInvalidArgumentError),
+    (re.compile(r"share creation failed", re.IGNORECASE), ZFSInvalidArgumentError),
+    (re.compile(r"cannot share", re.IGNORECASE), ZFSInvalidArgumentError),
 ]
 
 

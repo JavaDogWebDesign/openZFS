@@ -171,6 +171,20 @@ export function getPoolHistory(pool: string) {
   );
 }
 
+export interface IostatSample {
+  pool: string;
+  read_iops: number;
+  write_iops: number;
+  read_bw: number;
+  write_bw: number;
+}
+
+export function getIostatHistory(pool: string) {
+  return api.get<IostatSample[]>(
+    `/api/pools/${encodeURIComponent(pool)}/iostat-history`,
+  );
+}
+
 export function importPool(pool: string, force = false) {
   return api.post<{ message: string }>(
     `/api/pools/${encodeURIComponent(pool)}/import`,
