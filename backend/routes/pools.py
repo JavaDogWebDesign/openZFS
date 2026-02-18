@@ -182,20 +182,36 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
 
     await asyncio.sleep(1)
 
-    # 6. Re-import and destroy (can't destroy an exported pool directly)
+    # 6. Re-import if exported (can't destroy an exported pool directly)
     logger.info("[destroy %s] Re-importing for destroy", pool)
     try:
         await zpool.import_pool(pool)
     except Exception:
         pass  # May still be imported if export failed
 
-    # 7. Destroy with retries
+    # 7. Destroy with retries — kill iostat RIGHT BEFORE each attempt
+    #    because the WebSocket may reconnect and spawn a new process
     last_err = None
     for attempt in range(3):
         if attempt > 0:
             delay = attempt * 3
             logger.info("[destroy %s] Retry %d, waiting %ds...", pool, attempt + 1, delay)
             await asyncio.sleep(delay)
+
+        # Kill iostat/events subprocesses immediately before destroy
+        logger.info("[destroy %s] Killing zpool subprocesses (attempt %d)", pool, attempt + 1)
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "pkill", "-9", "-f", f"zpool iostat.*{pool}",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await p.wait()
+        except Exception:
+            pass
+        # Brief pause for process to fully die
+        await asyncio.sleep(0.5)
+
         try:
             await zpool.destroy_pool(pool, force=True)
             last_err = None
