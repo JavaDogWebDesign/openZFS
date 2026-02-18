@@ -115,18 +115,25 @@ async def create_pool(body: PoolCreateRequest, user: dict = Depends(get_current_
 
 @router.delete("/{pool}")
 async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends(get_current_user)):
-    """Destroy a pool. Requires confirmation."""
+    """Destroy a pool. Requires confirmation.
+
+    Sequence: kill processes → unmount → export (offline) → destroy.
+    A pool must be fully offline (no open handles) before it can be destroyed.
+    """
     import asyncio
     from services.cmd import run_cmd
 
     if body.confirm != pool:
         raise HTTPException(status_code=400, detail="Confirmation does not match pool name")
 
+    logger.info("Starting pool destroy sequence for %s", pool)
+
     # 1. Close WebSocket connections for this pool
     from ws import stop_pool_streams
     await stop_pool_streams(pool)
 
-    # 2. Kill ALL zpool subprocesses that reference this pool (iostat, events, etc.)
+    # 2. SIGKILL any zpool subprocesses referencing this pool
+    logger.info("[destroy %s] Killing zpool subprocesses", pool)
     for pattern in [f"zpool iostat.*{pool}", f"zpool.*{pool}"]:
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -137,14 +144,14 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
             await proc.wait()
         except Exception:
             pass
+    await asyncio.sleep(1)
 
     # 3. Kill any processes using the pool's mountpoint
     try:
-        # Get the pool's mountpoint
         mp_out, _, mp_rc = await run_cmd(["zfs", "get", "-H", "-o", "value", "mountpoint", pool])
-        if mp_rc == 0 and mp_out.strip():
+        if mp_rc == 0 and mp_out.strip() and mp_out.strip() != "-":
             mountpoint = mp_out.strip()
-            logger.info("Killing processes using mountpoint %s", mountpoint)
+            logger.info("[destroy %s] Killing processes on mountpoint %s", pool, mountpoint)
             proc = await asyncio.create_subprocess_exec(
                 "fuser", "-km", mountpoint,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -154,29 +161,52 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     except Exception:
         pass
 
-    # 4. Force unmount all datasets
+    # 4. Unshare and force-unmount all datasets under this pool
+    logger.info("[destroy %s] Unmounting datasets", pool)
+    for prop in ["sharenfs", "sharesmb"]:
+        try:
+            await run_cmd(["zfs", "set", f"{prop}=off", pool])
+        except Exception:
+            pass
     try:
         await run_cmd(["zfs", "unmount", "-f", pool])
     except Exception:
         pass
 
-    # 5. Retry destroy with increasing delays
+    # 5. Export the pool (take it offline — releases all kernel handles)
+    logger.info("[destroy %s] Exporting pool (taking offline)", pool)
+    try:
+        await zpool.export_pool(pool, force=True)
+    except Exception as e:
+        logger.warning("[destroy %s] Export failed: %s", pool, e)
+
+    await asyncio.sleep(1)
+
+    # 6. Re-import and destroy (can't destroy an exported pool directly)
+    logger.info("[destroy %s] Re-importing for destroy", pool)
+    try:
+        await zpool.import_pool(pool)
+    except Exception:
+        pass  # May still be imported if export failed
+
+    # 7. Destroy with retries
     last_err = None
-    for attempt in range(4):
+    for attempt in range(3):
         if attempt > 0:
-            delay = attempt * 2  # 2s, 4s, 6s
-            logger.info("Destroy attempt %d for %s, waiting %ds...", attempt + 1, pool, delay)
+            delay = attempt * 3
+            logger.info("[destroy %s] Retry %d, waiting %ds...", pool, attempt + 1, delay)
             await asyncio.sleep(delay)
         try:
             await zpool.destroy_pool(pool, force=True)
             last_err = None
+            logger.info("[destroy %s] Pool destroyed successfully", pool)
             break
         except Exception as e:
             last_err = e
-            logger.warning("Destroy attempt %d failed for %s: %s", attempt + 1, pool, e)
+            logger.warning("[destroy %s] Attempt %d failed: %s", pool, attempt + 1, e)
 
     if last_err is not None:
-        logger.error("All destroy attempts failed for %s", pool)
+        logger.error("[destroy %s] All attempts failed", pool)
         raise last_err
 
     await audit_log(user["username"], "pool.destroy", pool)
