@@ -130,57 +130,23 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     logger.info("Starting pool destroy sequence for %s", pool)
 
     # 1. Close WebSocket connections and SIGKILL their iostat subprocesses.
-    #    This is the main fix — the app's own `zpool iostat` subprocess is
-    #    what keeps the pool "busy".
+    #    The app's own `zpool iostat` subprocess is what keeps the pool
+    #    "busy".  The _destroying_pools guard in ws.py prevents the
+    #    frontend's auto-reconnect from spawning a new one.
     from ws import stop_pool_streams
     await stop_pool_streams(pool)
 
-    # 2. Safety net: pkill any zpool iostat processes for this pool that
-    #    we don't track (e.g. spawned by another client or leftover).
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "pkill", "-9", "-f", f"zpool iostat.*{pool}",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await proc.wait()
-    except Exception:
-        pass
-
-    # 3. Kill any processes using the pool's mountpoint (user shells, etc.)
-    try:
-        mp_out, _, mp_rc = await run_cmd(["zfs", "get", "-H", "-o", "value", "mountpoint", pool])
-        if mp_rc == 0 and mp_out.strip() and mp_out.strip() not in ("-", "none", "legacy"):
-            mountpoint = mp_out.strip()
-            logger.info("[destroy %s] Killing processes on mountpoint %s", pool, mountpoint)
-            proc = await asyncio.create_subprocess_exec(
-                "fuser", "-km", mountpoint,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
-    except Exception:
-        pass
-
     # Brief pause for killed processes to fully exit
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.5)
 
-    # 4. Destroy with retries
+    # 2. Destroy with retries
     last_err = None
     for attempt in range(3):
         if attempt > 0:
             logger.info("[destroy %s] Retry %d …", pool, attempt + 1)
             await asyncio.sleep(2)
-            # Kill any respawned iostat processes before retrying
-            try:
-                p = await asyncio.create_subprocess_exec(
-                    "pkill", "-9", "-f", f"zpool iostat.*{pool}",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await p.wait()
-            except Exception:
-                pass
+            # Re-kill in case anything respawned
+            await stop_pool_streams(pool)
             await asyncio.sleep(0.5)
 
         try:
