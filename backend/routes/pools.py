@@ -117,6 +117,7 @@ async def create_pool(body: PoolCreateRequest, user: dict = Depends(get_current_
 async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends(get_current_user)):
     """Destroy a pool. Requires confirmation."""
     import asyncio
+    from services.cmd import run_cmd
 
     if body.confirm != pool:
         raise HTTPException(status_code=400, detail="Confirmation does not match pool name")
@@ -125,35 +126,58 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     from ws import stop_pool_streams
     await stop_pool_streams(pool)
 
-    # 2. Kill any OS-level zpool iostat processes for this pool.
-    #    The WebSocket close may not propagate fast enough, so we
-    #    directly kill the subprocess via pkill as a safety net.
+    # 2. Kill ALL zpool subprocesses that reference this pool (iostat, events, etc.)
+    for pattern in [f"zpool iostat.*{pool}", f"zpool.*{pool}"]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "pkill", "-9", "-f", pattern,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+        except Exception:
+            pass
+
+    # 3. Kill any processes using the pool's mountpoint
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "pkill", "-f", f"zpool iostat.*{pool}",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await proc.wait()
+        # Get the pool's mountpoint
+        mp_out, _, mp_rc = await run_cmd(["zfs", "get", "-H", "-o", "value", "mountpoint", pool])
+        if mp_rc == 0 and mp_out.strip():
+            mountpoint = mp_out.strip()
+            logger.info("Killing processes using mountpoint %s", mountpoint)
+            proc = await asyncio.create_subprocess_exec(
+                "fuser", "-km", mountpoint,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
     except Exception:
         pass
 
-    # 3. Unmount all datasets under this pool
+    # 4. Force unmount all datasets
     try:
-        from services.cmd import run_cmd
         await run_cmd(["zfs", "unmount", "-f", pool])
     except Exception:
         pass
 
-    # Brief pause to let processes fully exit
-    await asyncio.sleep(1)
+    # 5. Retry destroy with increasing delays
+    last_err = None
+    for attempt in range(4):
+        if attempt > 0:
+            delay = attempt * 2  # 2s, 4s, 6s
+            logger.info("Destroy attempt %d for %s, waiting %ds...", attempt + 1, pool, delay)
+            await asyncio.sleep(delay)
+        try:
+            await zpool.destroy_pool(pool, force=True)
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            logger.warning("Destroy attempt %d failed for %s: %s", attempt + 1, pool, e)
 
-    # 4. Force destroy (handles remaining mounts)
-    try:
-        await zpool.destroy_pool(pool, force=True)
-    except Exception as e:
-        logger.error("Pool destroy failed for %s: %s", pool, e)
-        raise
+    if last_err is not None:
+        logger.error("All destroy attempts failed for %s", pool)
+        raise last_err
 
     await audit_log(user["username"], "pool.destroy", pool)
     return {"message": f"Pool {pool} destroyed"}

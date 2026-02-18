@@ -97,6 +97,11 @@ ok "ZFS tools installed: $(zpool version | head -1)"
 info "Installing to ${INSTALL_DIR}..."
 mkdir -p "${INSTALL_DIR}"
 
+# Clear stale Python bytecache before copying — rsync --exclude='__pycache__'
+# preserves old .pyc files in the destination, which causes Python to run
+# outdated code even after deploying new .py files.
+find "${INSTALL_DIR}/backend" -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+
 # Copy backend
 rsync -a --delete \
     --exclude='__pycache__' \
