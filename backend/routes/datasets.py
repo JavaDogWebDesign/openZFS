@@ -90,11 +90,10 @@ async def unmount_dataset(name: str, user: dict = Depends(get_current_user)):
 @router.post("/{name:path}/share")
 async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_current_user)):
     """Share a dataset via NFS or SMB."""
+    import asyncio
     import shutil
 
     prop = "sharenfs" if body.protocol == "nfs" else "sharesmb"
-
-    import subprocess
 
     # Check that the required sharing service is installed and running
     if body.protocol == "nfs":
@@ -103,11 +102,11 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
                 status_code=400,
                 detail="NFS sharing requires nfs-kernel-server. Install with: apt install nfs-kernel-server",
             )
-        # Check if NFS server is running
-        rc = subprocess.call(
-            ["systemctl", "is-active", "--quiet", "nfs-kernel-server"],
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "is-active", "--quiet", "nfs-kernel-server",
         )
-        if rc != 0:
+        await proc.wait()
+        if proc.returncode != 0:
             raise HTTPException(
                 status_code=400,
                 detail="NFS server is not running. Start it with: systemctl start nfs-kernel-server",
@@ -118,10 +117,11 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
                 status_code=400,
                 detail="SMB sharing requires Samba. Install with: apt install samba",
             )
-        rc = subprocess.call(
-            ["systemctl", "is-active", "--quiet", "smbd"],
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "is-active", "--quiet", "smbd",
         )
-        if rc != 0:
+        await proc.wait()
+        if proc.returncode != 0:
             raise HTTPException(
                 status_code=400,
                 detail="Samba is not running. Start it with: systemctl start smbd",
@@ -132,7 +132,17 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
         options = "on"
     else:
         options = body.options if body.options else "on"
-    await zfs.set_property(name, prop, options)
+    try:
+        await zfs.set_property(name, prop, options)
+    except Exception as e:
+        # Catch share-related ZFS errors and return a helpful 400 instead of 500
+        msg = str(e)
+        if "share" in msg.lower() or "system error" in msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=f"{msg}. Ensure the sharing service is running and configured.",
+            )
+        raise
     await audit_log(user["username"], "dataset.share", name, detail=body.protocol)
     return {"message": f"Dataset {name} shared via {body.protocol}"}
 
