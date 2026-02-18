@@ -310,14 +310,36 @@ export function unmountDataset(name: string) {
   );
 }
 
+export interface SmbOptions {
+  guest_ok: boolean;
+  browseable: boolean;
+  read_only: boolean;
+}
+
+export interface SmbConfig {
+  configured: boolean;
+  share_name?: string;
+  path?: string;
+  guest_ok?: boolean;
+  browseable?: boolean;
+  read_only?: boolean;
+}
+
 export function shareDataset(
   name: string,
   protocol: "nfs" | "smb",
   options = "",
+  smbOptions?: SmbOptions,
 ) {
   return api.post<{ message: string }>(
     `/api/datasets/${encodePath(name)}/share`,
-    { protocol, options },
+    { protocol, options, smb_options: smbOptions ?? null },
+  );
+}
+
+export function getSmbConfig(name: string) {
+  return api.get<SmbConfig>(
+    `/api/datasets/${encodePath(name)}/smb-config`,
   );
 }
 

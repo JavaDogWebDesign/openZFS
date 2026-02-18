@@ -5,6 +5,7 @@ import {
   shareDataset,
   unshareDataset,
   type DatasetSummary,
+  type SmbOptions as ApiSmbOptions,
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { useToast } from "@/components/Toast";
@@ -105,8 +106,8 @@ export function Sharing() {
   } = useApi(() => listDatasets(), []);
 
   const shareMutation = useMutation(
-    (name: string, protocol: "nfs" | "smb", options: string) =>
-      shareDataset(name, protocol, options),
+    (name: string, protocol: "nfs" | "smb", options: string, smbOptions?: ApiSmbOptions) =>
+      shareDataset(name, protocol, options, smbOptions),
   );
 
   const unshareMutation = useMutation((name: string, protocol?: "nfs" | "smb") =>
@@ -193,7 +194,11 @@ export function Sharing() {
       newShareProtocol === "nfs"
         ? buildNfsOptions(nfsOpts)
         : buildSmbOptions(smbOpts);
-    const result = await shareMutation.execute(newShareDataset, newShareProtocol, options);
+    const apiSmbOpts: ApiSmbOptions | undefined =
+      newShareProtocol === "smb"
+        ? { guest_ok: smbOpts.guestOk, browseable: smbOpts.browseable, read_only: smbOpts.readOnly }
+        : undefined;
+    const result = await shareMutation.execute(newShareDataset, newShareProtocol, options, apiSmbOpts);
     if (result) {
       addToast("success", `Shared ${newShareDataset} via ${newShareProtocol.toUpperCase()}`);
       setNewShareDataset("");
@@ -385,18 +390,16 @@ export function Sharing() {
               >
                 <option value="">Select dataset...</option>
                 {datasets
-                  ?.filter(
-                    (ds: DatasetSummary) =>
-                      // Allow datasets not yet shared via the selected protocol
-                      !shareDetails.some(
-                        (sh) => sh.dataset === ds.name && sh.protocol === newShareProtocol,
-                      ),
-                  )
-                  .map((ds: DatasetSummary) => (
-                    <option key={ds.name} value={ds.name}>
-                      {ds.name}
-                    </option>
-                  ))}
+                  ?.map((ds: DatasetSummary) => {
+                    const alreadyShared = shareDetails.some(
+                      (sh) => sh.dataset === ds.name && sh.protocol === newShareProtocol,
+                    );
+                    return (
+                      <option key={ds.name} value={ds.name}>
+                        {ds.name}{alreadyShared ? " (already shared)" : ""}
+                      </option>
+                    );
+                  })}
               </select>
             </div>
             <div style={{ flex: "0 0 120px" }}>
@@ -500,18 +503,66 @@ export function Sharing() {
           ) : (
             <div
               style={{
-                background: "var(--color-bg-surface)",
-                border: "1px solid var(--color-border)",
-                borderRadius: "var(--radius-sm)",
-                padding: "var(--space-3)",
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "var(--space-3)",
                 marginBottom: "var(--space-3)",
-                fontSize: "var(--text-sm)",
-                color: "var(--color-text-muted)",
               }}
             >
-              <strong>SMB sharing</strong> will set <code>sharesmb=on</code> for this dataset.
-              Advanced Samba options (guest access, browseable, read-only) are configured
-              in <code>/etc/samba/smb.conf</code> on the server, not via ZFS properties.
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={smbOpts.guestOk}
+                    onChange={(e) => setSmbOpts((o) => ({ ...o, guestOk: e.target.checked }))}
+                  />
+                  Guest access
+                </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)" }}>
+                  Allow access without a password. Useful for public shares on trusted networks.
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={smbOpts.browseable}
+                    onChange={(e) => setSmbOpts((o) => ({ ...o, browseable: e.target.checked }))}
+                  />
+                  Browseable
+                </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)" }}>
+                  Make the share visible when browsing the network. Disable to create a hidden share.
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={smbOpts.readOnly}
+                    onChange={(e) => setSmbOpts((o) => ({ ...o, readOnly: e.target.checked }))}
+                  />
+                  Read only
+                </label>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)" }}>
+                  Prevent clients from modifying files on this share.
+                </div>
+              </div>
+              <div>
+                <div
+                  style={{
+                    background: "var(--color-bg-surface)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: "var(--radius-sm)",
+                    padding: "var(--space-2) var(--space-3)",
+                    fontSize: "var(--text-xs)",
+                    color: "var(--color-text-muted)",
+                  }}
+                >
+                  SMB config is written to <code>/etc/samba/zfs-manager-shares.conf</code> and
+                  included automatically in <code>smb.conf</code>.
+                </div>
+              </div>
             </div>
           )}
 
@@ -525,15 +576,25 @@ export function Sharing() {
                 padding: "var(--space-2) var(--space-3)",
                 marginBottom: "var(--space-3)",
                 display: "flex",
-                alignItems: "center",
+                alignItems: newShareProtocol === "smb" ? "flex-start" : "center",
                 gap: "var(--space-2)",
               }}
             >
-              <Eye size={14} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
-              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>Preview:</span>
-              <code className={s.mono} style={{ fontSize: "var(--text-sm)" }}>
-                {previewOptions}
-              </code>
+              <Eye size={14} style={{ color: "var(--color-text-muted)", flexShrink: 0, marginTop: newShareProtocol === "smb" ? 2 : 0 }} />
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", flexShrink: 0 }}>Preview:</span>
+              {newShareProtocol === "smb" ? (
+                <pre className={s.mono} style={{ fontSize: "var(--text-xs)", margin: 0, whiteSpace: "pre" }}>
+{`[${newShareDataset.replace("/", "_")}]
+  path = /${newShareDataset}
+  guest ok = ${smbOpts.guestOk ? "yes" : "no"}
+  browseable = ${smbOpts.browseable ? "yes" : "no"}
+  read only = ${smbOpts.readOnly ? "yes" : "no"}`}
+                </pre>
+              ) : (
+                <code className={s.mono} style={{ fontSize: "var(--text-sm)" }}>
+                  {previewOptions}
+                </code>
+              )}
             </div>
           )}
 

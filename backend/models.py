@@ -114,9 +114,16 @@ class InheritRequest(BaseModel):
     recursive: bool = False
 
 
+class SmbOptions(BaseModel):
+    guest_ok: bool = False
+    browseable: bool = True
+    read_only: bool = False
+
+
 class ShareRequest(BaseModel):
     protocol: str = Field("nfs", pattern="^(nfs|smb)$")
     options: str = ""
+    smb_options: SmbOptions | None = None
 
 
 # --- Snapshots ---

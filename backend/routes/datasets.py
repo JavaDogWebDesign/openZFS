@@ -14,6 +14,7 @@ from models import (
     ShareRequest,
 )
 from services import zfs
+from services import samba
 from db import audit_log
 
 router = APIRouter()
@@ -143,6 +144,20 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
                 detail=f"{msg}. Ensure the sharing service is running and configured.",
             )
         raise
+
+    # For SMB shares, write Samba config to the managed include file
+    if body.protocol == "smb":
+        props = await zfs.get_properties(name)
+        mountpoint = props.get("mountpoint", {}).get("value", f"/{name}")
+        smb_opts = body.smb_options
+        await samba.set_share(
+            dataset=name,
+            mountpoint=mountpoint,
+            guest_ok=smb_opts.guest_ok if smb_opts else False,
+            browseable=smb_opts.browseable if smb_opts else True,
+            read_only=smb_opts.read_only if smb_opts else False,
+        )
+
     await audit_log(user["username"], "dataset.share", name, detail=body.protocol)
     return {"message": f"Dataset {name} shared via {body.protocol}"}
 
@@ -159,12 +174,23 @@ async def unshare_dataset(
         await zfs.set_property(name, "sharenfs", "off")
     elif protocol == "smb":
         await zfs.set_property(name, "sharesmb", "off")
+        await samba.remove_share(name)
     else:
         # No protocol specified — remove both
         await zfs.set_property(name, "sharenfs", "off")
         await zfs.set_property(name, "sharesmb", "off")
+        await samba.remove_share(name)
     await audit_log(user["username"], "dataset.unshare", name, detail=protocol or "all")
     return {"message": f"Dataset {name} unshared ({protocol or 'all'})"}
+
+
+@router.get("/{name:path}/smb-config")
+async def get_smb_config(name: str, user: dict = Depends(get_current_user)):
+    """Get the current Samba configuration for a dataset from the managed include file."""
+    config = samba.get_share(name)
+    if config is None:
+        return {"configured": False}
+    return {"configured": True, **config}
 
 
 # --- Encryption ---
