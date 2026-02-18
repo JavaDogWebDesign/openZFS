@@ -1,8 +1,12 @@
 """Pool management API routes."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from middleware.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 from models import (
     DeviceActionRequest,
     ImportRequest,
@@ -117,16 +121,23 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     # Unshare all datasets first — active NFS/SMB shares can block destroy
     from services import zfs
     try:
-        datasets = await zfs.list_datasets(pool=pool)
-        for ds in datasets:
+        ds_list = await zfs.list_datasets(pool=pool)
+        for ds in ds_list:
             try:
                 await zfs.set_property(ds["name"], "sharenfs", "off")
+            except Exception:
+                pass
+            try:
                 await zfs.set_property(ds["name"], "sharesmb", "off")
             except Exception:
-                pass  # Best effort — continue with destroy
+                pass
     except Exception:
         pass  # If listing fails, proceed with destroy anyway
-    await zpool.destroy_pool(pool, force=body.force)
+    try:
+        await zpool.destroy_pool(pool, force=body.force)
+    except Exception as e:
+        logger.error("Pool destroy failed for %s: %s", pool, e)
+        raise
     await audit_log(user["username"], "pool.destroy", pool)
     return {"message": f"Pool {pool} destroyed"}
 

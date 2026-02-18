@@ -90,7 +90,22 @@ async def unmount_dataset(name: str, user: dict = Depends(get_current_user)):
 @router.post("/{name:path}/share")
 async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_current_user)):
     """Share a dataset via NFS or SMB."""
+    import shutil
+
     prop = "sharenfs" if body.protocol == "nfs" else "sharesmb"
+
+    # Check that the required sharing service is installed
+    if body.protocol == "nfs" and not shutil.which("exportfs"):
+        raise HTTPException(
+            status_code=400,
+            detail="NFS sharing requires nfs-kernel-server. Install it with: apt install nfs-kernel-server",
+        )
+    if body.protocol == "smb" and not shutil.which("net"):
+        raise HTTPException(
+            status_code=400,
+            detail="SMB sharing requires Samba. Install it with: apt install samba",
+        )
+
     # SMB only supports "on"/"off"; NFS supports export options strings
     if body.protocol == "smb":
         options = "on"

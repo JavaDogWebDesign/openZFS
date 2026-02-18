@@ -236,5 +236,9 @@ if _frontend_dist.is_dir() and _index_html.is_file():
             and file_path.is_file()
         ):
             return FileResponse(str(file_path))
-        # Everything else gets index.html — React Router handles the route
-        return FileResponse(str(_index_html))
+        # index.html must never be cached — the hashed JS/CSS filenames
+        # inside it change on every build; a stale index.html loads stale bundles.
+        return FileResponse(
+            str(_index_html),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
