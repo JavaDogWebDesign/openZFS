@@ -21,7 +21,7 @@ import s from "@/styles/views.module.css";
 
 interface ShareInfo {
   dataset: string;
-  protocol: "nfs" | "smb" | "none";
+  protocol: "nfs" | "smb";
   options: string;
   active: boolean;
 }
@@ -109,8 +109,8 @@ export function Sharing() {
       shareDataset(name, protocol, options),
   );
 
-  const unshareMutation = useMutation((name: string) =>
-    unshareDataset(name),
+  const unshareMutation = useMutation((name: string, protocol?: "nfs" | "smb") =>
+    unshareDataset(name, protocol),
   );
 
   // Load detailed properties for all datasets
@@ -132,7 +132,7 @@ export function Sharing() {
         if (result.status !== "fulfilled") return;
         const props = result.value;
 
-        // Gather share info
+        // Gather share info — a dataset can have both NFS and SMB active
         const sharenfs = props["sharenfs"]?.value ?? "off";
         const sharesmb = props["sharesmb"]?.value ?? "off";
         if (sharenfs !== "off" && sharenfs !== "-") {
@@ -142,7 +142,8 @@ export function Sharing() {
             options: sharenfs,
             active: true,
           });
-        } else if (sharesmb !== "off" && sharesmb !== "-") {
+        }
+        if (sharesmb !== "off" && sharesmb !== "-") {
           shares.push({
             dataset: ds.name,
             protocol: "smb",
@@ -204,10 +205,10 @@ export function Sharing() {
     }
   };
 
-  const handleUnshare = async (name: string) => {
-    const result = await unshareMutation.execute(name);
+  const handleUnshare = async (name: string, protocol: "nfs" | "smb") => {
+    const result = await unshareMutation.execute(name, protocol);
     if (result) {
-      addToast("success", `Unshared ${name}`);
+      addToast("success", `Unshared ${name} (${protocol.toUpperCase()})`);
       loadDetails();
     } else if (unshareMutation.error) {
       addToast("error", unshareMutation.error);
@@ -292,7 +293,7 @@ export function Sharing() {
             <tbody>
               {shareDetails.map((share) => (
                 <tr
-                  key={share.dataset}
+                  key={`${share.dataset}-${share.protocol}`}
                   style={{
                     borderBottom: "1px solid var(--color-border)",
                   }}
@@ -329,7 +330,7 @@ export function Sharing() {
                   <td style={{ padding: "var(--space-3)" }}>
                     <button
                       className={s.btnDanger}
-                      onClick={() => handleUnshare(share.dataset)}
+                      onClick={() => handleUnshare(share.dataset, share.protocol)}
                       disabled={unshareMutation.loading}
                     >
                       {unshareMutation.loading ? "..." : "Unshare"}
@@ -386,7 +387,10 @@ export function Sharing() {
                 {datasets
                   ?.filter(
                     (ds: DatasetSummary) =>
-                      !shareDetails.some((sh) => sh.dataset === ds.name),
+                      // Allow datasets not yet shared via the selected protocol
+                      !shareDetails.some(
+                        (sh) => sh.dataset === ds.name && sh.protocol === newShareProtocol,
+                      ),
                   )
                   .map((ds: DatasetSummary) => (
                     <option key={ds.name} value={ds.name}>

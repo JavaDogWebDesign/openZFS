@@ -321,9 +321,10 @@ export function shareDataset(
   );
 }
 
-export function unshareDataset(name: string) {
+export function unshareDataset(name: string, protocol?: "nfs" | "smb") {
+  const query = protocol ? `?protocol=${protocol}` : "";
   return api.post<{ message: string }>(
-    `/api/datasets/${encodePath(name)}/unshare`,
+    `/api/datasets/${encodePath(name)}/unshare${query}`,
   );
 }
 

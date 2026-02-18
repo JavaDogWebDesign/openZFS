@@ -148,13 +148,23 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
 
 
 @router.post("/{name:path}/unshare")
-async def unshare_dataset(name: str, user: dict = Depends(get_current_user)):
-    """Unshare a dataset by resetting sharenfs and sharesmb to off."""
-    # Reset share properties — this also unshares the dataset
-    await zfs.set_property(name, "sharenfs", "off")
-    await zfs.set_property(name, "sharesmb", "off")
-    await audit_log(user["username"], "dataset.unshare", name)
-    return {"message": f"Dataset {name} unshared"}
+async def unshare_dataset(
+    name: str,
+    protocol: str | None = None,
+    user: dict = Depends(get_current_user),
+):
+    """Unshare a dataset. Optionally specify protocol=nfs or protocol=smb to
+    remove only one sharing protocol while keeping the other active."""
+    if protocol == "nfs":
+        await zfs.set_property(name, "sharenfs", "off")
+    elif protocol == "smb":
+        await zfs.set_property(name, "sharesmb", "off")
+    else:
+        # No protocol specified — remove both
+        await zfs.set_property(name, "sharenfs", "off")
+        await zfs.set_property(name, "sharesmb", "off")
+    await audit_log(user["username"], "dataset.unshare", name, detail=protocol or "all")
+    return {"message": f"Dataset {name} unshared ({protocol or 'all'})"}
 
 
 # --- Encryption ---
