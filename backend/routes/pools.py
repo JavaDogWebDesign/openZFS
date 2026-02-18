@@ -114,6 +114,18 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     """Destroy a pool. Requires confirmation."""
     if body.confirm != pool:
         raise HTTPException(status_code=400, detail="Confirmation does not match pool name")
+    # Unshare all datasets first — active NFS/SMB shares can block destroy
+    from services import zfs
+    try:
+        datasets = await zfs.list_datasets(pool=pool)
+        for ds in datasets:
+            try:
+                await zfs.set_property(ds["name"], "sharenfs", "off")
+                await zfs.set_property(ds["name"], "sharesmb", "off")
+            except Exception:
+                pass  # Best effort — continue with destroy
+    except Exception:
+        pass  # If listing fails, proceed with destroy anyway
     await zpool.destroy_pool(pool, force=body.force)
     await audit_log(user["username"], "pool.destroy", pool)
     return {"message": f"Pool {pool} destroyed"}

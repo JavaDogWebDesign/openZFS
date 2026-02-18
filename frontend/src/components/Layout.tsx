@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -12,7 +12,8 @@ import {
   Bell,
 } from "lucide-react";
 import clsx from "clsx";
-import { logout } from "@/lib/api";
+import { listPools, logout } from "@/lib/api";
+import { connectPool } from "@/lib/iostat-store";
 import { ActivityPanel } from "./ActivityPanel";
 import styles from "./Layout.module.css";
 
@@ -35,6 +36,16 @@ interface LayoutProps {
 export function Layout({ username, onLogout }: LayoutProps) {
   const navigate = useNavigate();
   const [activityOpen, setActivityOpen] = useState(false);
+
+  /* Start iostat data collection immediately on login so the Dashboard
+     has historical data even if the user navigates elsewhere first. */
+  useEffect(() => {
+    listPools()
+      .then((pools) => {
+        if (pools?.length > 0) connectPool(pools[0].name);
+      })
+      .catch(() => {/* Dashboard will retry */});
+  }, []);
 
   const handleLogout = async () => {
     try {

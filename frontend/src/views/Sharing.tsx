@@ -65,12 +65,15 @@ const DEFAULT_SMB: SmbOptions = {
 };
 
 function buildNfsOptions(opts: NfsOptions): string {
+  // ZFS sharenfs accepts comma-separated NFS options, NOT the
+  // /etc/exports host(opts) format. Host access control is managed
+  // separately in /etc/exports or /etc/exports.d/.
   const parts: string[] = [opts.permissions];
   if (opts.noRootSquash) parts.push("no_root_squash");
   if (opts.sync) parts.push("sync");
   else parts.push("async");
   if (opts.noSubtreeCheck) parts.push("no_subtree_check");
-  return `${opts.hosts}(${parts.join(",")})`;
+  return parts.join(",");
 }
 
 function buildSmbOptions(_opts: SmbOptions): string {
@@ -419,18 +422,18 @@ export function Sharing() {
               }}
             >
               <div>
-                <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
-                  Access Hosts
-                </label>
-                <input
-                  className={s.select}
-                  style={{ width: "100%", boxSizing: "border-box" }}
-                  value={nfsOpts.hosts}
-                  onChange={(e) => setNfsOpts((o) => ({ ...o, hosts: e.target.value }))}
-                  placeholder="* (all hosts)"
-                />
-                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: 2 }}>
-                  Which clients can access this share. Use * for all hosts, a specific IP (192.168.1.10), or a subnet (10.0.0.0/24).
+                <div
+                  style={{
+                    background: "var(--color-bg-surface)",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: "var(--radius-sm)",
+                    padding: "var(--space-2) var(--space-3)",
+                    fontSize: "var(--text-xs)",
+                    color: "var(--color-text-muted)",
+                  }}
+                >
+                  Host access control (which IPs can connect) is configured
+                  in <code>/etc/exports</code> on the server, not via ZFS properties.
                 </div>
               </div>
               <div>
