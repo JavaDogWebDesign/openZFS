@@ -76,6 +76,8 @@ PACKAGES=(
     nginx
     rsync               # used by this script to copy files
     smartmontools       # smartctl for drive health monitoring
+    nfs-kernel-server   # NFS sharing support (sharenfs property)
+    samba               # SMB/CIFS sharing support (sharesmb property)
 )
 
 info "Installing system packages: ${PACKAGES[*]}"
