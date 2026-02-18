@@ -73,13 +73,11 @@ function buildNfsOptions(opts: NfsOptions): string {
   return `${opts.hosts}(${parts.join(",")})`;
 }
 
-function buildSmbOptions(opts: SmbOptions): string {
-  const parts: string[] = [];
-  if (opts.guestOk) parts.push("guest_ok=yes");
-  if (opts.readOnly) parts.push("read only=yes");
-  if (opts.browseable) parts.push("browseable=yes");
-  else parts.push("browseable=no");
-  return parts.length > 0 ? parts.join(",") : "on";
+function buildSmbOptions(_opts: SmbOptions): string {
+  // ZFS sharesmb property only accepts "on" or "off".
+  // Samba-specific options (guest ok, browseable, etc.) must be
+  // configured in /etc/samba/smb.conf, not via the ZFS property.
+  return "on";
 }
 
 export function Sharing() {
@@ -495,51 +493,18 @@ export function Sharing() {
           ) : (
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr 1fr",
-                gap: "var(--space-4)",
+                background: "var(--color-bg-surface)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "var(--space-3)",
                 marginBottom: "var(--space-3)",
+                fontSize: "var(--text-sm)",
+                color: "var(--color-text-muted)",
               }}
             >
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={smbOpts.guestOk}
-                    onChange={(e) => setSmbOpts((o) => ({ ...o, guestOk: e.target.checked }))}
-                  />
-                  Guest Access
-                </label>
-                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
-                  Allow access without a username or password. Useful for open file drops or media shares on a trusted network.
-                </div>
-              </div>
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={smbOpts.readOnly}
-                    onChange={(e) => setSmbOpts((o) => ({ ...o, readOnly: e.target.checked }))}
-                  />
-                  Read Only
-                </label>
-                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
-                  Prevent all clients from creating, modifying, or deleting files on this share. Clients can only view and copy files.
-                </div>
-              </div>
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={smbOpts.browseable}
-                    onChange={(e) => setSmbOpts((o) => ({ ...o, browseable: e.target.checked }))}
-                  />
-                  Browseable
-                </label>
-                <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
-                  Make this share visible when browsing the network (e.g. in Windows File Explorer). Hidden shares can still be accessed by typing the full path.
-                </div>
-              </div>
+              <strong>SMB sharing</strong> will set <code>sharesmb=on</code> for this dataset.
+              Advanced Samba options (guest access, browseable, read-only) are configured
+              in <code>/etc/samba/smb.conf</code> on the server, not via ZFS properties.
             </div>
           )}
 

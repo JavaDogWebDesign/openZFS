@@ -90,10 +90,13 @@ async def unmount_dataset(name: str, user: dict = Depends(get_current_user)):
 @router.post("/{name:path}/share")
 async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_current_user)):
     """Share a dataset via NFS or SMB."""
-    if body.options:
-        prop = "sharenfs" if body.protocol == "nfs" else "sharesmb"
-        await zfs.set_property(name, prop, body.options)
-    await zfs.share(name)
+    prop = "sharenfs" if body.protocol == "nfs" else "sharesmb"
+    # SMB only supports "on"/"off"; NFS supports export options strings
+    if body.protocol == "smb":
+        options = "on"
+    else:
+        options = body.options if body.options else "on"
+    await zfs.set_property(name, prop, options)
     await audit_log(user["username"], "dataset.share", name, detail=body.protocol)
     return {"message": f"Dataset {name} shared via {body.protocol}"}
 
