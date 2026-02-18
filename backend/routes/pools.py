@@ -116,30 +116,45 @@ async def create_pool(body: PoolCreateRequest, user: dict = Depends(get_current_
 @router.delete("/{pool}")
 async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends(get_current_user)):
     """Destroy a pool. Requires confirmation."""
+    import asyncio
+
     if body.confirm != pool:
         raise HTTPException(status_code=400, detail="Confirmation does not match pool name")
 
-    # 1. Kill any active iostat WebSocket streams — their `zpool iostat`
-    #    subprocess holds the pool open and causes "pool is busy".
+    # 1. Close WebSocket connections for this pool
     from ws import stop_pool_streams
     await stop_pool_streams(pool)
 
-    # 2. Forcefully unmount all datasets and unshare them
+    # 2. Kill any OS-level zpool iostat processes for this pool.
+    #    The WebSocket close may not propagate fast enough, so we
+    #    directly kill the subprocess via pkill as a safety net.
     try:
-        await zpool.export_pool(pool, force=True)
+        proc = await asyncio.create_subprocess_exec(
+            "pkill", "-f", f"zpool iostat.*{pool}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
     except Exception:
-        logger.info("Pool export before destroy failed for %s, trying direct destroy", pool)
+        pass
 
-    # 3. Re-import (export detaches) and destroy
+    # 3. Unmount all datasets under this pool
     try:
-        try:
-            await zpool.import_pool(pool)
-        except Exception:
-            pass  # May already be imported if export failed
-        await zpool.destroy_pool(pool, force=body.force)
+        from services.cmd import run_cmd
+        await run_cmd(["zfs", "unmount", "-f", pool])
+    except Exception:
+        pass
+
+    # Brief pause to let processes fully exit
+    await asyncio.sleep(1)
+
+    # 4. Force destroy (handles remaining mounts)
+    try:
+        await zpool.destroy_pool(pool, force=True)
     except Exception as e:
         logger.error("Pool destroy failed for %s: %s", pool, e)
         raise
+
     await audit_log(user["username"], "pool.destroy", pool)
     return {"message": f"Pool {pool} destroyed"}
 
