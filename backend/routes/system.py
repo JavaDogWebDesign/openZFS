@@ -1,6 +1,8 @@
 """System information API routes."""
 
 import json
+import os
+import pathlib
 import re
 import shutil
 
@@ -12,6 +14,27 @@ from services.smart import get_all_smart
 from db import get_audit_log
 
 router = APIRouter()
+
+
+def _build_by_id_map() -> dict[str, str]:
+    """Build a map from /dev/sdX real paths to /dev/disk/by-id/ symlinks.
+
+    Prefers wwn- and scsi- identifiers over ata- ones.
+    Returns an empty dict if /dev/disk/by-id doesn't exist (e.g., VMs).
+    """
+    by_id_map: dict[str, str] = {}
+    by_id_dir = pathlib.Path("/dev/disk/by-id")
+    if not by_id_dir.is_dir():
+        return by_id_map
+    for link in by_id_dir.iterdir():
+        try:
+            target = os.path.realpath(str(link))
+            # Prefer wwn- or scsi- identifiers over generic ata- ones
+            if target not in by_id_map or link.name.startswith(("wwn-", "scsi-")):
+                by_id_map[target] = str(link)
+        except OSError:
+            continue
+    return by_id_map
 
 
 @router.get("/version")
@@ -27,7 +50,7 @@ async def get_version(user: dict = Depends(get_current_user)):
 
 @router.get("/disks")
 async def list_disks(user: dict = Depends(get_current_user)):
-    """List available block devices."""
+    """List available block devices with stable /dev/disk/by-id/ paths."""
     stdout, stderr, rc = await run_cmd([
         "lsblk", "-Jbp", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL,SERIAL",
     ])
@@ -35,9 +58,18 @@ async def list_disks(user: dict = Depends(get_current_user)):
         return {"error": f"lsblk failed: {stderr}", "devices": []}
     try:
         data = json.loads(stdout)
-        return {"devices": data.get("blockdevices", [])}
     except json.JSONDecodeError:
         return {"error": "Failed to parse lsblk output", "devices": []}
+
+    by_id_map = _build_by_id_map()
+
+    devices = data.get("blockdevices", [])
+    for dev in devices:
+        dev["by_id"] = by_id_map.get(os.path.realpath(dev.get("name", "")))
+        for child in dev.get("children", []):
+            child["by_id"] = by_id_map.get(os.path.realpath(child.get("name", "")))
+
+    return {"devices": devices}
 
 
 @router.get("/drives")
@@ -60,6 +92,9 @@ async def list_drives(user: dict = Depends(get_current_user)):
 
     # Filter to physical disks only
     disks = [d for d in all_devices if d.get("type") == "disk"]
+
+    # Resolve stable /dev/disk/by-id/ paths
+    by_id_map = _build_by_id_map()
 
     # 2. Build pool-device map via zpool status -LP
     pool_map: dict[str, str] = {}  # device path -> pool name
@@ -114,6 +149,7 @@ async def list_drives(user: dict = Depends(get_current_user)):
 
         drives.append({
             "name": name,
+            "by_id": by_id_map.get(os.path.realpath(name)),
             "size": size,
             "model": (disk.get("model") or "").strip() or None,
             "serial": (disk.get("serial") or "").strip() or None,

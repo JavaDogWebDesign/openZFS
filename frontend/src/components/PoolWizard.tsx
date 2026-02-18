@@ -33,6 +33,8 @@ type Ashift = "9" | "12" | "13";
 
 interface DiskEntry {
   name: string;
+  /** Stable /dev/disk/by-id/ path — preferred for pool creation */
+  byId: string | null;
   size: string;
   model: string;
   mounted: boolean;
@@ -158,6 +160,7 @@ const ASHIFT_OPTIONS: { value: Ashift; label: string }[] = [
 function parseDisk(raw: Record<string, unknown>): DiskEntry {
   return {
     name: String(raw.name ?? raw.device ?? ""),
+    byId: raw.by_id ? String(raw.by_id) : null,
     size: String(raw.size ?? raw.mediasize ?? "unknown"),
     model: String(raw.model ?? raw.description ?? raw.ident ?? "unknown"),
     mounted: Boolean(raw.mounted),
@@ -165,6 +168,11 @@ function parseDisk(raw: Record<string, unknown>): DiskEntry {
       raw.filesystem || raw.fstype || raw.has_filesystem,
     ),
   };
+}
+
+/** Return the stable device path (by-id preferred, falls back to /dev/sdX). */
+function stablePath(disk: DiskEntry): string {
+  return disk.byId ?? disk.name;
 }
 
 function redundancyClass(level: TopologyOption["redundancy"]): string {
@@ -325,11 +333,12 @@ function StepDisks({
   }, [rawDisks]);
 
   const toggle = useCallback(
-    (name: string) => {
+    (disk: DiskEntry) => {
+      const id = stablePath(disk);
       update({
-        selectedDisks: state.selectedDisks.includes(name)
-          ? state.selectedDisks.filter((d) => d !== name)
-          : [...state.selectedDisks, name],
+        selectedDisks: state.selectedDisks.includes(id)
+          ? state.selectedDisks.filter((d) => d !== id)
+          : [...state.selectedDisks, id],
       });
     },
     [state.selectedDisks, update],
@@ -374,18 +383,19 @@ function StepDisks({
       </div>
       <div className={css.diskList}>
         {disks.map((disk) => {
-          const selected = state.selectedDisks.includes(disk.name);
+          const id = stablePath(disk);
+          const selected = state.selectedDisks.includes(id);
           return (
             <div
-              key={disk.name}
+              key={id}
               className={selected ? css.diskItemSelected : css.diskItem}
-              onClick={() => toggle(disk.name)}
+              onClick={() => toggle(disk)}
             >
               <input
                 type="checkbox"
                 className={css.diskCheckbox}
                 checked={selected}
-                onChange={() => toggle(disk.name)}
+                onChange={() => toggle(disk)}
                 onClick={(e) => e.stopPropagation()}
               />
               <HardDrive size={16} />
@@ -395,6 +405,11 @@ function StepDisks({
                   <span>{disk.size}</span>
                   <span>{disk.model}</span>
                 </div>
+                {disk.byId && (
+                  <div className={css.diskMeta} style={{ opacity: 0.6, fontSize: "var(--text-xs)" }}>
+                    {disk.byId.replace("/dev/disk/by-id/", "")}
+                  </div>
+                )}
               </div>
             </div>
           );
