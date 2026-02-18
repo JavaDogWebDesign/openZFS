@@ -118,15 +118,20 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     """Destroy a pool. Requires confirmation."""
     if body.confirm != pool:
         raise HTTPException(status_code=400, detail="Confirmation does not match pool name")
-    # Export the pool first (forcefully unmounts everything and releases
-    # all handles), then re-import and destroy.  If export fails, fall
-    # through to a direct force-destroy.
+
+    # 1. Kill any active iostat WebSocket streams — their `zpool iostat`
+    #    subprocess holds the pool open and causes "pool is busy".
+    from ws import stop_pool_streams
+    await stop_pool_streams(pool)
+
+    # 2. Forcefully unmount all datasets and unshare them
     try:
         await zpool.export_pool(pool, force=True)
     except Exception:
         logger.info("Pool export before destroy failed for %s, trying direct destroy", pool)
+
+    # 3. Re-import (export detaches) and destroy
     try:
-        # After export the pool is detached — import it back for destroy
         try:
             await zpool.import_pool(pool)
         except Exception:

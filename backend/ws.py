@@ -26,10 +26,33 @@ router = APIRouter()
 MAX_HISTORY = 300
 _iostat_history: dict[str, deque[dict[str, Any]]] = {}
 
+# --- Active WebSocket connections per pool ---
+# Tracked so we can forcefully close them before pool destroy.
+_active_ws: dict[str, set[WebSocket]] = {}
+
 
 def get_iostat_history(pool: str) -> list[dict[str, Any]]:
     """Return stored iostat history for a pool."""
     return list(_iostat_history.get(pool, []))
+
+
+async def stop_pool_streams(pool: str) -> None:
+    """Close all active WebSocket iostat connections for a pool.
+
+    This kills the underlying `zpool iostat` subprocess, releasing the
+    pool so it can be exported/destroyed without "pool is busy" errors.
+    """
+    ws_set = _active_ws.get(pool)
+    if not ws_set:
+        return
+    logger.info("Stopping %d iostat stream(s) for pool %s", len(ws_set), pool)
+    for ws in list(ws_set):
+        try:
+            await ws.close(code=1000, reason="Pool is being destroyed")
+        except Exception:
+            pass
+    # Give the subprocess a moment to terminate
+    await asyncio.sleep(0.5)
 
 
 async def _ws_authenticate(websocket: WebSocket) -> bool:
@@ -57,6 +80,11 @@ async def ws_iostat(ws: WebSocket, pool: str = ""):
         return
     logger.info("WebSocket iostat stream started for pool: %s", pool)
 
+    # Register this connection so it can be killed before pool destroy
+    if pool not in _active_ws:
+        _active_ws[pool] = set()
+    _active_ws[pool].add(ws)
+
     try:
         async for sample in zpool.iostat_stream(pool, interval=1):
             # Store in server-side history buffer
@@ -72,6 +100,8 @@ async def ws_iostat(ws: WebSocket, pool: str = ""):
             await ws.close(code=1011, reason=str(e))
         except Exception:
             pass
+    finally:
+        _active_ws.get(pool, set()).discard(ws)
 
 
 @router.websocket("/events")
