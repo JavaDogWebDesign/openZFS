@@ -245,9 +245,9 @@ async def remove_user_from_group(username: str, group: str) -> None:
 
 
 async def lock_account(username: str) -> None:
-    """Lock a user account via passwd -l."""
+    """Lock a user account via usermod -L."""
     proc = await asyncio.create_subprocess_exec(
-        "passwd", "-l", username,
+        "usermod", "-L", username,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -258,9 +258,13 @@ async def lock_account(username: str) -> None:
 
 
 async def unlock_account(username: str) -> None:
-    """Unlock a user account via passwd -u."""
+    """Unlock a user account via usermod -U.
+
+    We use usermod -U instead of passwd -u because passwd -u refuses to
+    unlock accounts that would become passwordless (exit code 1).
+    """
     proc = await asyncio.create_subprocess_exec(
-        "passwd", "-u", username,
+        "usermod", "-U", username,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
