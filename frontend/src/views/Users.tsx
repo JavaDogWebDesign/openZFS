@@ -129,10 +129,11 @@ export function Users() {
       setNewUsername("");
       setNewPassword("");
       setNewFullName("");
-      refetchUsers();
     } else if (createUserMutation.error) {
       addToast("error", createUserMutation.error);
     }
+    // Always refetch — useradd may partially succeed (e.g. user created but mail spool failed)
+    refetchUsers();
   };
 
   const handleDeleteUser = async (username: string) => {
@@ -142,11 +143,11 @@ export function Users() {
       addToast("success", `User '${username}' deleted`);
       setDeleteConfirm(null);
       setDeleteConfirmValue("");
-      refetchUsers();
-      refetchSmbUsers();
     } else if (deleteUserMutation.error) {
       addToast("error", deleteUserMutation.error);
     }
+    refetchUsers();
+    refetchSmbUsers();
   };
 
   const handleChangePassword = async () => {
@@ -167,10 +168,10 @@ export function Users() {
     if (result) {
       addToast("success", `Group '${newGroupName}' created`);
       setNewGroupName("");
-      refetchGroups();
     } else if (createGroupMutation.error) {
       addToast("error", createGroupMutation.error);
     }
+    refetchGroups();
   };
 
   const handleDeleteGroup = async (name: string) => {
@@ -180,10 +181,10 @@ export function Users() {
       addToast("success", `Group '${name}' deleted`);
       setDeleteGroupConfirm(null);
       setDeleteGroupConfirmValue("");
-      refetchGroups();
     } else if (deleteGroupMutation.error) {
       addToast("error", deleteGroupMutation.error);
     }
+    refetchGroups();
   };
 
   const handleAddMember = async (group: string) => {
@@ -192,20 +193,20 @@ export function Users() {
     if (result) {
       addToast("success", `Added '${addMemberUser}' to '${group}'`);
       setAddMemberUser("");
-      refetchGroups();
     } else if (addToGroupMutation.error) {
       addToast("error", addToGroupMutation.error);
     }
+    refetchGroups();
   };
 
   const handleRemoveMember = async (username: string, group: string) => {
     const result = await removeFromGroupMutation.execute(username, group);
     if (result) {
       addToast("success", `Removed '${username}' from '${group}'`);
-      refetchGroups();
     } else if (removeFromGroupMutation.error) {
       addToast("error", removeFromGroupMutation.error);
     }
+    refetchGroups();
   };
 
   const handleAddSmbUser = async () => {
