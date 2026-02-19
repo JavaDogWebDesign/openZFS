@@ -301,3 +301,32 @@ class SmbUserCreate(BaseModel):
 
 class SmbUserChangePassword(BaseModel):
     password: str = Field(..., min_length=1)
+
+
+# --- System Users & Groups ---
+
+
+class SystemUserCreate(BaseModel):
+    username: str = Field(..., pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
+    password: str = Field(..., min_length=1)
+    full_name: str = ""
+
+
+class SystemUserDelete(BaseModel):
+    confirm: str
+
+
+class SystemPasswordChange(BaseModel):
+    password: str = Field(..., min_length=1)
+
+
+class GroupCreate(BaseModel):
+    name: str = Field(..., pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
+class GroupDelete(BaseModel):
+    confirm: str
+
+
+class ShareAccessUpdate(BaseModel):
+    valid_users: str = ""

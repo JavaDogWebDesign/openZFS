@@ -251,6 +251,23 @@ async def remove_user(username: str) -> None:
     logger.info("Removed Samba user: %s", username)
 
 
+async def update_share_valid_users(share_name: str, valid_users: str) -> None:
+    """Update the 'valid users' directive for a share section."""
+    cp = _read_config()
+
+    if not cp.has_section(share_name):
+        raise RuntimeError(f"Share '{share_name}' not found in managed config")
+
+    if valid_users.strip():
+        cp.set(share_name, "valid users", valid_users.strip())
+    elif cp.has_option(share_name, "valid users"):
+        cp.remove_option(share_name, "valid users")
+
+    _write_config(cp)
+    await _reload_smbd()
+    logger.info("Updated valid users for [%s]: %s", share_name, valid_users or "(removed)")
+
+
 async def change_password(username: str, password: str) -> None:
     """Change a Samba user's password."""
     proc = await asyncio.create_subprocess_exec(

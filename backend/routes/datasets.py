@@ -11,6 +11,7 @@ from models import (
     ChangeKeyRequest,
     PermissionSetRequest,
     PropertySetRequest,
+    ShareAccessUpdate,
     ShareRequest,
     SmbUserCreate,
     SmbUserChangePassword,
@@ -201,6 +202,30 @@ async def get_smb_config(name: str, user: dict = Depends(get_current_user)):
     if config is None:
         return {"configured": False}
     return {"configured": True, **config}
+
+
+# --- SMB Shares ---
+
+
+@router.get("/smb-shares")
+async def list_smb_shares(user: dict = Depends(get_current_user)):
+    """List all managed SMB shares."""
+    return samba.list_shares()
+
+
+@router.patch("/smb-shares/{share_name}/access")
+async def update_share_access(
+    share_name: str,
+    body: ShareAccessUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Update the valid_users for an SMB share."""
+    try:
+        await samba.update_share_valid_users(share_name, body.valid_users)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "smb.share.access", share_name, detail=body.valid_users)
+    return {"message": f"Updated access for share '{share_name}'"}
 
 
 # --- SMB Users ---

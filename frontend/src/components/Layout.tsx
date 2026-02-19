@@ -8,6 +8,7 @@ import {
   Camera,
   RefreshCw,
   Share2,
+  Users,
   Settings,
   Bell,
 } from "lucide-react";
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { to: "/snapshots", label: "Snapshots", icon: Camera },
   { to: "/replication", label: "Replication", icon: RefreshCw },
   { to: "/sharing", label: "Sharing", icon: Share2 },
+  { to: "/users", label: "Users", icon: Users },
   { to: "/settings", label: "System", icon: Settings },
 ] as const;
 

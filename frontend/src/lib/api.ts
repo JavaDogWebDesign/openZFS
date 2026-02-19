@@ -397,6 +397,104 @@ export function changeSmbPassword(username: string, password: string) {
   );
 }
 
+// --- SMB Shares ---
+
+export interface SmbShareInfo {
+  share_name: string;
+  path: string;
+  guest_ok: boolean;
+  browseable: boolean;
+  read_only: boolean;
+  valid_users: string;
+  write_list: string;
+  create_mask: string;
+  directory_mask: string;
+  force_user: string;
+  force_group: string;
+  inherit_permissions: boolean;
+  vfs_objects: string;
+}
+
+export function listSmbShares() {
+  return api.get<SmbShareInfo[]>("/api/datasets/smb-shares");
+}
+
+export function updateShareAccess(shareName: string, validUsers: string) {
+  return api.patch<{ message: string }>(
+    `/api/datasets/smb-shares/${encodeURIComponent(shareName)}/access`,
+    { valid_users: validUsers },
+  );
+}
+
+// --- System Users & Groups ---
+
+export interface SystemUser {
+  username: string;
+  uid: number;
+  gid: number;
+  full_name: string;
+  home: string;
+  shell: string;
+}
+
+export interface SystemGroup {
+  name: string;
+  gid: number;
+  members: string[];
+}
+
+export function listSystemUsers() {
+  return api.get<SystemUser[]>("/api/users");
+}
+
+export function createSystemUser(username: string, password: string, fullName = "") {
+  return api.post<{ message: string }>("/api/users", {
+    username,
+    password,
+    full_name: fullName,
+  });
+}
+
+export function deleteSystemUser(username: string, confirm: string) {
+  return api.del<{ message: string }>(`/api/users/${encodeURIComponent(username)}`, {
+    confirm,
+  });
+}
+
+export function changeSystemPassword(username: string, password: string) {
+  return api.patch<{ message: string }>(
+    `/api/users/${encodeURIComponent(username)}/password`,
+    { password },
+  );
+}
+
+export function listGroups() {
+  return api.get<SystemGroup[]>("/api/users/groups");
+}
+
+export function createGroup(name: string) {
+  return api.post<{ message: string }>("/api/users/groups", { name });
+}
+
+export function deleteGroup(name: string, confirm: string) {
+  return api.del<{ message: string }>(
+    `/api/users/groups/${encodeURIComponent(name)}`,
+    { confirm },
+  );
+}
+
+export function addUserToGroup(username: string, group: string) {
+  return api.post<{ message: string }>(
+    `/api/users/${encodeURIComponent(username)}/groups/${encodeURIComponent(group)}`,
+  );
+}
+
+export function removeUserFromGroup(username: string, group: string) {
+  return api.del<{ message: string }>(
+    `/api/users/${encodeURIComponent(username)}/groups/${encodeURIComponent(group)}`,
+  );
+}
+
 export function getUserspace(name: string) {
   return api.get<Array<Record<string, string>>>(
     `/api/datasets/${encodePath(name)}/userspace`,

@@ -18,7 +18,7 @@ from exceptions import ZFSError
 from models import LoginRequest
 from services.cmd import ValidationError
 from middleware.auth import check_rate_limit, login, logout, get_current_user
-from routes import pools, datasets, snapshots, replication, system
+from routes import pools, datasets, snapshots, replication, system, users
 from ws import router as ws_router
 from db import cleanup_sessions, close_db, list_scrub_schedules, update_scrub_schedule
 from services import zpool
@@ -191,6 +191,7 @@ app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(snapshots.router, prefix="/api/snapshots", tags=["snapshots"])
 app.include_router(replication.router, prefix="/api/replication", tags=["replication"])
 app.include_router(system.router, prefix="/api/system", tags=["system"])
+app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(ws_router, prefix="/api/ws", tags=["websocket"])
 
 

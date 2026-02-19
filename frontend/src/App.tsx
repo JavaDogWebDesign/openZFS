@@ -12,6 +12,7 @@ import { Datasets } from "@/views/Datasets";
 import { Snapshots } from "@/views/Snapshots";
 import { Replication } from "@/views/Replication";
 import { Sharing } from "@/views/Sharing";
+import { Users } from "@/views/Users";
 import { Settings } from "@/views/Settings";
 
 export function App() {
@@ -66,6 +67,7 @@ export function App() {
                 <Route path="snapshots" element={<Snapshots />} />
                 <Route path="replication" element={<Replication />} />
                 <Route path="sharing" element={<Sharing />} />
+                <Route path="users" element={<Users />} />
                 <Route path="settings" element={<Settings />} />
               </Route>
             ) : (
