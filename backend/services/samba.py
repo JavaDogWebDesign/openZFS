@@ -75,6 +75,14 @@ async def set_share(
     guest_ok: bool = False,
     browseable: bool = True,
     read_only: bool = False,
+    valid_users: str = "",
+    write_list: str = "",
+    create_mask: str = "",
+    directory_mask: str = "",
+    force_user: str = "",
+    force_group: str = "",
+    inherit_permissions: bool = False,
+    vfs_objects: str = "",
 ) -> str:
     """Write or update a share section in the include file.
 
@@ -92,6 +100,29 @@ async def set_share(
     cp.set(share_name, "guest ok", "yes" if guest_ok else "no")
     cp.set(share_name, "browseable", "yes" if browseable else "no")
     cp.set(share_name, "read only", "yes" if read_only else "no")
+
+    # Optional directives — only write if non-empty, remove if cleared
+    _optional_directives = {
+        "valid users": valid_users,
+        "write list": write_list,
+        "create mask": create_mask,
+        "directory mask": directory_mask,
+        "force user": force_user,
+        "force group": force_group,
+        "vfs objects": vfs_objects,
+    }
+    for directive, value in _optional_directives.items():
+        if value:
+            cp.set(share_name, directive, value)
+        elif cp.has_option(share_name, directive):
+            cp.remove_option(share_name, directive)
+
+    # Boolean optional directive
+    if inherit_permissions:
+        cp.set(share_name, "inherit permissions", "yes")
+    elif cp.has_option(share_name, "inherit permissions"):
+        cp.remove_option(share_name, "inherit permissions")
+
     cp.set(share_name, "# managed by", "zfs-manager")
 
     _write_config(cp)
@@ -120,6 +151,25 @@ async def remove_share(dataset: str) -> bool:
     return True
 
 
+def _read_share_section(cp: configparser.ConfigParser, section: str) -> dict:
+    """Read a single share section into a dict."""
+    return {
+        "share_name": section,
+        "path": cp.get(section, "path", fallback=""),
+        "guest_ok": cp.get(section, "guest ok", fallback="no") == "yes",
+        "browseable": cp.get(section, "browseable", fallback="yes") == "yes",
+        "read_only": cp.get(section, "read only", fallback="no") == "yes",
+        "valid_users": cp.get(section, "valid users", fallback=""),
+        "write_list": cp.get(section, "write list", fallback=""),
+        "create_mask": cp.get(section, "create mask", fallback=""),
+        "directory_mask": cp.get(section, "directory mask", fallback=""),
+        "force_user": cp.get(section, "force user", fallback=""),
+        "force_group": cp.get(section, "force group", fallback=""),
+        "inherit_permissions": cp.get(section, "inherit permissions", fallback="no") == "yes",
+        "vfs_objects": cp.get(section, "vfs objects", fallback=""),
+    }
+
+
 def get_share(dataset: str) -> dict | None:
     """Get the current SMB config for a dataset, or None if not found."""
     share_name = _share_name(dataset)
@@ -128,25 +178,90 @@ def get_share(dataset: str) -> dict | None:
     if not cp.has_section(share_name):
         return None
 
-    return {
-        "share_name": share_name,
-        "path": cp.get(share_name, "path", fallback=""),
-        "guest_ok": cp.get(share_name, "guest ok", fallback="no") == "yes",
-        "browseable": cp.get(share_name, "browseable", fallback="yes") == "yes",
-        "read_only": cp.get(share_name, "read only", fallback="no") == "yes",
-    }
+    return _read_share_section(cp, share_name)
 
 
 def list_shares() -> list[dict]:
     """List all ZFS Manager-managed SMB shares."""
     cp = _read_config()
-    shares = []
-    for section in cp.sections():
-        shares.append({
-            "share_name": section,
-            "path": cp.get(section, "path", fallback=""),
-            "guest_ok": cp.get(section, "guest ok", fallback="no") == "yes",
-            "browseable": cp.get(section, "browseable", fallback="yes") == "yes",
-            "read_only": cp.get(section, "read only", fallback="no") == "yes",
-        })
-    return shares
+    return [_read_share_section(cp, section) for section in cp.sections()]
+
+
+# --- Samba user management ---
+
+
+async def list_users() -> list[dict]:
+    """List Samba users via pdbedit."""
+    proc = await asyncio.create_subprocess_exec(
+        "pdbedit", "-L",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = stderr.decode().strip()
+        logger.error("pdbedit -L failed: %s", err)
+        raise RuntimeError(f"Failed to list Samba users: {err}")
+
+    users = []
+    for line in stdout.decode().strip().splitlines():
+        # Format: username:uid:full name
+        parts = line.split(":")
+        if len(parts) >= 3:
+            users.append({
+                "username": parts[0],
+                "full_name": parts[2],
+            })
+        elif len(parts) >= 1 and parts[0]:
+            users.append({
+                "username": parts[0],
+                "full_name": "",
+            })
+    return users
+
+
+async def add_user(username: str, password: str) -> None:
+    """Add a Samba user. The user must already exist as a system user."""
+    proc = await asyncio.create_subprocess_exec(
+        "smbpasswd", "-a", "-s", username,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate(input=f"{password}\n{password}\n".encode())
+    if proc.returncode != 0:
+        err = stderr.decode().strip()
+        logger.error("smbpasswd -a failed for %s: %s", username, err)
+        raise RuntimeError(f"Failed to add Samba user '{username}': {err}")
+    logger.info("Added Samba user: %s", username)
+
+
+async def remove_user(username: str) -> None:
+    """Remove a Samba user."""
+    proc = await asyncio.create_subprocess_exec(
+        "smbpasswd", "-x", username,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err = stderr.decode().strip()
+        logger.error("smbpasswd -x failed for %s: %s", username, err)
+        raise RuntimeError(f"Failed to remove Samba user '{username}': {err}")
+    logger.info("Removed Samba user: %s", username)
+
+
+async def change_password(username: str, password: str) -> None:
+    """Change a Samba user's password."""
+    proc = await asyncio.create_subprocess_exec(
+        "smbpasswd", "-s", username,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate(input=f"{password}\n{password}\n".encode())
+    if proc.returncode != 0:
+        err = stderr.decode().strip()
+        logger.error("smbpasswd password change failed for %s: %s", username, err)
+        raise RuntimeError(f"Failed to change password for '{username}': {err}")
+    logger.info("Changed Samba password for: %s", username)

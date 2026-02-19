@@ -314,6 +314,14 @@ export interface SmbOptions {
   guest_ok: boolean;
   browseable: boolean;
   read_only: boolean;
+  valid_users: string;
+  write_list: string;
+  create_mask: string;
+  directory_mask: string;
+  force_user: string;
+  force_group: string;
+  inherit_permissions: boolean;
+  vfs_objects: string;
 }
 
 export interface SmbConfig {
@@ -323,6 +331,14 @@ export interface SmbConfig {
   guest_ok?: boolean;
   browseable?: boolean;
   read_only?: boolean;
+  valid_users?: string;
+  write_list?: string;
+  create_mask?: string;
+  directory_mask?: string;
+  force_user?: string;
+  force_group?: string;
+  inherit_permissions?: boolean;
+  vfs_objects?: string;
 }
 
 export function shareDataset(
@@ -347,6 +363,37 @@ export function unshareDataset(name: string, protocol?: "nfs" | "smb") {
   const query = protocol ? `?protocol=${protocol}` : "";
   return api.post<{ message: string }>(
     `/api/datasets/${encodePath(name)}/unshare${query}`,
+  );
+}
+
+// --- SMB Users ---
+
+export interface SmbUser {
+  username: string;
+  full_name: string;
+}
+
+export function listSmbUsers() {
+  return api.get<SmbUser[]>("/api/datasets/smb-users");
+}
+
+export function addSmbUser(username: string, password: string) {
+  return api.post<{ message: string }>("/api/datasets/smb-users", {
+    username,
+    password,
+  });
+}
+
+export function removeSmbUser(username: string) {
+  return api.del<{ message: string }>(
+    `/api/datasets/smb-users/${encodeURIComponent(username)}`,
+  );
+}
+
+export function changeSmbPassword(username: string, password: string) {
+  return api.patch<{ message: string }>(
+    `/api/datasets/smb-users/${encodeURIComponent(username)}`,
+    { password },
   );
 }
 

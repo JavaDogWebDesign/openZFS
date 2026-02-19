@@ -12,6 +12,8 @@ from models import (
     PermissionSetRequest,
     PropertySetRequest,
     ShareRequest,
+    SmbUserCreate,
+    SmbUserChangePassword,
 )
 from services import zfs
 from services import samba
@@ -156,6 +158,14 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
             guest_ok=smb_opts.guest_ok if smb_opts else False,
             browseable=smb_opts.browseable if smb_opts else True,
             read_only=smb_opts.read_only if smb_opts else False,
+            valid_users=smb_opts.valid_users if smb_opts else "",
+            write_list=smb_opts.write_list if smb_opts else "",
+            create_mask=smb_opts.create_mask if smb_opts else "",
+            directory_mask=smb_opts.directory_mask if smb_opts else "",
+            force_user=smb_opts.force_user if smb_opts else "",
+            force_group=smb_opts.force_group if smb_opts else "",
+            inherit_permissions=smb_opts.inherit_permissions if smb_opts else False,
+            vfs_objects=smb_opts.vfs_objects if smb_opts else "",
         )
 
     await audit_log(user["username"], "dataset.share", name, detail=body.protocol)
@@ -191,6 +201,43 @@ async def get_smb_config(name: str, user: dict = Depends(get_current_user)):
     if config is None:
         return {"configured": False}
     return {"configured": True, **config}
+
+
+# --- SMB Users ---
+
+
+@router.get("/smb-users")
+async def list_smb_users(user: dict = Depends(get_current_user)):
+    """List all Samba users."""
+    return await samba.list_users()
+
+
+@router.post("/smb-users")
+async def add_smb_user(body: SmbUserCreate, user: dict = Depends(get_current_user)):
+    """Add a Samba user. The user must already exist as a system user."""
+    await samba.add_user(body.username, body.password)
+    await audit_log(user["username"], "smb.user.add", body.username)
+    return {"message": f"Samba user '{body.username}' added"}
+
+
+@router.delete("/smb-users/{username}")
+async def remove_smb_user(username: str, user: dict = Depends(get_current_user)):
+    """Remove a Samba user."""
+    await samba.remove_user(username)
+    await audit_log(user["username"], "smb.user.remove", username)
+    return {"message": f"Samba user '{username}' removed"}
+
+
+@router.patch("/smb-users/{username}")
+async def change_smb_password(
+    username: str,
+    body: SmbUserChangePassword,
+    user: dict = Depends(get_current_user),
+):
+    """Change a Samba user's password."""
+    await samba.change_password(username, body.password)
+    await audit_log(user["username"], "smb.user.password", username)
+    return {"message": f"Password changed for Samba user '{username}'"}
 
 
 # --- Encryption ---

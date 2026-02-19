@@ -118,6 +118,14 @@ class SmbOptions(BaseModel):
     guest_ok: bool = False
     browseable: bool = True
     read_only: bool = False
+    valid_users: str = ""
+    write_list: str = ""
+    create_mask: str = ""
+    directory_mask: str = ""
+    force_user: str = ""
+    force_group: str = ""
+    inherit_permissions: bool = False
+    vfs_objects: str = ""
 
 
 class ShareRequest(BaseModel):
@@ -281,3 +289,15 @@ class ScrubScheduleUpdate(BaseModel):
     hour: int | None = Field(None, ge=0, le=23)
     minute: int | None = Field(None, ge=0, le=59)
     enabled: bool | None = None
+
+
+# --- SMB Users ---
+
+
+class SmbUserCreate(BaseModel):
+    username: str
+    password: str = Field(..., min_length=1)
+
+
+class SmbUserChangePassword(BaseModel):
+    password: str = Field(..., min_length=1)
