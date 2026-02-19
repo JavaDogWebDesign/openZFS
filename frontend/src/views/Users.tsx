@@ -50,7 +50,6 @@ export function Users() {
   const [changePwUser, setChangePwUser] = useState<string | null>(null);
   const [changePwValue, setChangePwValue] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [deleteConfirmValue, setDeleteConfirmValue] = useState("");
 
   const createUserMutation = useMutation(
     (username: string, password: string, fullName: string) =>
@@ -69,7 +68,6 @@ export function Users() {
 
   const [newGroupName, setNewGroupName] = useState("");
   const [deleteGroupConfirm, setDeleteGroupConfirm] = useState<string | null>(null);
-  const [deleteGroupConfirmValue, setDeleteGroupConfirmValue] = useState("");
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [addMemberUser, setAddMemberUser] = useState("");
 
@@ -138,12 +136,10 @@ export function Users() {
   };
 
   const handleDeleteUser = async (username: string) => {
-    if (deleteConfirmValue !== username) return;
-    const result = await deleteUserMutation.execute(username, deleteConfirmValue);
+    const result = await deleteUserMutation.execute(username, username);
     if (result) {
       addToast("success", `User '${username}' deleted`);
       setDeleteConfirm(null);
-      setDeleteConfirmValue("");
     } else if (deleteUserMutation.error) {
       addToast("error", deleteUserMutation.error);
     }
@@ -176,12 +172,10 @@ export function Users() {
   };
 
   const handleDeleteGroup = async (name: string) => {
-    if (deleteGroupConfirmValue !== name) return;
-    const result = await deleteGroupMutation.execute(name, deleteGroupConfirmValue);
+    const result = await deleteGroupMutation.execute(name, name);
     if (result) {
       addToast("success", `Group '${name}' deleted`);
       setDeleteGroupConfirm(null);
-      setDeleteGroupConfirmValue("");
     } else if (deleteGroupMutation.error) {
       addToast("error", deleteGroupMutation.error);
     }
@@ -356,24 +350,20 @@ export function Users() {
                         </>
                       ) : deleteConfirm === u.username ? (
                         <>
-                          <input
-                            className={s.input}
-                            placeholder={`Type "${u.username}" to confirm`}
-                            value={deleteConfirmValue}
-                            onChange={(e) => setDeleteConfirmValue(e.target.value)}
-                            style={{ width: 200 }}
-                          />
+                          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-danger)" }}>
+                            Delete {u.username}?
+                          </span>
                           <button
                             className={s.btnDanger}
                             onClick={() => handleDeleteUser(u.username)}
-                            disabled={deleteUserMutation.loading || deleteConfirmValue !== u.username}
+                            disabled={deleteUserMutation.loading}
                             style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
                           >
-                            {deleteUserMutation.loading ? "..." : "Confirm Delete"}
+                            {deleteUserMutation.loading ? "..." : "Confirm"}
                           </button>
                           <button
                             className={s.btnGhost}
-                            onClick={() => { setDeleteConfirm(null); setDeleteConfirmValue(""); }}
+                            onClick={() => setDeleteConfirm(null)}
                             style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
                           >
                             Cancel
@@ -390,7 +380,7 @@ export function Users() {
                           </button>
                           <button
                             className={s.btnDanger}
-                            onClick={() => { setDeleteConfirm(u.username); setDeleteConfirmValue(""); }}
+                            onClick={() => setDeleteConfirm(u.username)}
                             style={{ display: "flex", alignItems: "center", gap: 4 }}
                           >
                             <Trash2 size={12} /> Delete
@@ -550,24 +540,20 @@ export function Users() {
                       <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
                         {deleteGroupConfirm === g.name ? (
                           <>
-                            <input
-                              className={s.input}
-                              placeholder={`Type "${g.name}"`}
-                              value={deleteGroupConfirmValue}
-                              onChange={(e) => setDeleteGroupConfirmValue(e.target.value)}
-                              style={{ width: 140 }}
-                            />
+                            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-danger)" }}>
+                              Delete {g.name}?
+                            </span>
                             <button
                               className={s.btnDanger}
                               onClick={() => handleDeleteGroup(g.name)}
-                              disabled={deleteGroupMutation.loading || deleteGroupConfirmValue !== g.name}
+                              disabled={deleteGroupMutation.loading}
                               style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
                             >
                               {deleteGroupMutation.loading ? "..." : "Confirm"}
                             </button>
                             <button
                               className={s.btnGhost}
-                              onClick={() => { setDeleteGroupConfirm(null); setDeleteGroupConfirmValue(""); }}
+                              onClick={() => setDeleteGroupConfirm(null)}
                               style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
                             >
                               Cancel
@@ -588,7 +574,7 @@ export function Users() {
                             </button>
                             <button
                               className={s.btnDanger}
-                              onClick={() => { setDeleteGroupConfirm(g.name); setDeleteGroupConfirmValue(""); }}
+                              onClick={() => setDeleteGroupConfirm(g.name)}
                               style={{ display: "flex", alignItems: "center", gap: 4 }}
                             >
                               <Trash2 size={12} /> Delete
