@@ -1,4 +1,9 @@
-"""Dataset management API routes."""
+"""Dataset management API routes.
+
+IMPORTANT: Fixed-prefix routes (/smb-shares/*, /smb-users/*) MUST be defined
+before any /{name:path} routes, because FastAPI's :path converter is greedy
+and would match "smb-users/batman" as a dataset name otherwise.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -23,6 +28,9 @@ from db import audit_log
 router = APIRouter()
 
 
+# --- Non-path routes (must come first) ---
+
+
 @router.get("")
 async def list_datasets(
     pool: str | None = None,
@@ -31,12 +39,6 @@ async def list_datasets(
 ):
     """List all datasets, optionally filtered by pool."""
     return await zfs.list_datasets(pool=pool, dataset_type=type)
-
-
-@router.get("/{name:path}/properties")
-async def get_dataset_properties(name: str, user: dict = Depends(get_current_user)):
-    """Get all properties for a dataset."""
-    return await zfs.get_properties(name)
 
 
 @router.post("")
@@ -49,6 +51,97 @@ async def create_dataset(body: DatasetCreateRequest, user: dict = Depends(get_cu
     )
     await audit_log(user["username"], "dataset.create", body.name)
     return {"message": f"Dataset {body.name} created"}
+
+
+# --- SMB Shares (fixed prefix — before /{name:path}) ---
+
+
+@router.get("/smb-shares")
+async def list_smb_shares(user: dict = Depends(get_current_user)):
+    """List all managed SMB shares."""
+    return samba.list_shares()
+
+
+@router.patch("/smb-shares/{share_name}/access")
+async def update_share_access(
+    share_name: str,
+    body: ShareAccessUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Update the valid_users for an SMB share."""
+    try:
+        await samba.update_share_valid_users(share_name, body.valid_users)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "smb.share.access", share_name, detail=body.valid_users)
+    return {"message": f"Updated access for share '{share_name}'"}
+
+
+# --- SMB Users (fixed prefix — before /{name:path}) ---
+
+
+@router.get("/smb-users")
+async def list_smb_users(user: dict = Depends(get_current_user)):
+    """List all Samba users."""
+    try:
+        return await samba.list_users()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/smb-users")
+async def add_smb_user(body: SmbUserCreate, user: dict = Depends(get_current_user)):
+    """Add a Samba user. The user must already exist as a system user."""
+    try:
+        await samba.add_user(body.username, body.password)
+    except RuntimeError as e:
+        msg = str(e)
+        # smbpasswd -a fails if the system user doesn't exist
+        if "Failed to add entry" in msg:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to add SMB user '{body.username}'. "
+                       f"The user must exist as a system user first. "
+                       f"Create it with: useradd {body.username}",
+            )
+        raise HTTPException(status_code=400, detail=msg)
+    await audit_log(user["username"], "smb.user.add", body.username)
+    return {"message": f"Samba user '{body.username}' added"}
+
+
+@router.delete("/smb-users/{username}")
+async def remove_smb_user(username: str, user: dict = Depends(get_current_user)):
+    """Remove a Samba user."""
+    try:
+        await samba.remove_user(username)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "smb.user.remove", username)
+    return {"message": f"Samba user '{username}' removed"}
+
+
+@router.patch("/smb-users/{username}")
+async def change_smb_password(
+    username: str,
+    body: SmbUserChangePassword,
+    user: dict = Depends(get_current_user),
+):
+    """Change a Samba user's password."""
+    try:
+        await samba.change_password(username, body.password)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "smb.user.password", username)
+    return {"message": f"Password changed for Samba user '{username}'"}
+
+
+# --- Dataset path routes (/{name:path} — must come LAST) ---
+
+
+@router.get("/{name:path}/properties")
+async def get_dataset_properties(name: str, user: dict = Depends(get_current_user)):
+    """Get all properties for a dataset."""
+    return await zfs.get_properties(name)
 
 
 @router.delete("/{name:path}")
@@ -202,88 +295,6 @@ async def get_smb_config(name: str, user: dict = Depends(get_current_user)):
     if config is None:
         return {"configured": False}
     return {"configured": True, **config}
-
-
-# --- SMB Shares ---
-
-
-@router.get("/smb-shares")
-async def list_smb_shares(user: dict = Depends(get_current_user)):
-    """List all managed SMB shares."""
-    return samba.list_shares()
-
-
-@router.patch("/smb-shares/{share_name}/access")
-async def update_share_access(
-    share_name: str,
-    body: ShareAccessUpdate,
-    user: dict = Depends(get_current_user),
-):
-    """Update the valid_users for an SMB share."""
-    try:
-        await samba.update_share_valid_users(share_name, body.valid_users)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await audit_log(user["username"], "smb.share.access", share_name, detail=body.valid_users)
-    return {"message": f"Updated access for share '{share_name}'"}
-
-
-# --- SMB Users ---
-
-
-@router.get("/smb-users")
-async def list_smb_users(user: dict = Depends(get_current_user)):
-    """List all Samba users."""
-    try:
-        return await samba.list_users()
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/smb-users")
-async def add_smb_user(body: SmbUserCreate, user: dict = Depends(get_current_user)):
-    """Add a Samba user. The user must already exist as a system user."""
-    try:
-        await samba.add_user(body.username, body.password)
-    except RuntimeError as e:
-        msg = str(e)
-        # smbpasswd -a fails if the system user doesn't exist
-        if "Failed to add entry" in msg:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Failed to add SMB user '{body.username}'. "
-                       f"The user must exist as a system user first. "
-                       f"Create it with: useradd {body.username}",
-            )
-        raise HTTPException(status_code=400, detail=msg)
-    await audit_log(user["username"], "smb.user.add", body.username)
-    return {"message": f"Samba user '{body.username}' added"}
-
-
-@router.delete("/smb-users/{username}")
-async def remove_smb_user(username: str, user: dict = Depends(get_current_user)):
-    """Remove a Samba user."""
-    try:
-        await samba.remove_user(username)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await audit_log(user["username"], "smb.user.remove", username)
-    return {"message": f"Samba user '{username}' removed"}
-
-
-@router.patch("/smb-users/{username}")
-async def change_smb_password(
-    username: str,
-    body: SmbUserChangePassword,
-    user: dict = Depends(get_current_user),
-):
-    """Change a Samba user's password."""
-    try:
-        await samba.change_password(username, body.password)
-    except RuntimeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await audit_log(user["username"], "smb.user.password", username)
-    return {"message": f"Password changed for Samba user '{username}'"}
 
 
 # --- Encryption ---
