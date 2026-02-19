@@ -5,8 +5,10 @@ before any /{name:path} routes, because FastAPI's :path converter is greedy
 and would match "smb-users/batman" as a dataset name otherwise.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+import os
+import stat
 
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 
 from middleware.auth import get_current_user
@@ -358,6 +360,15 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
             vfs_objects=smb_opts.vfs_objects if smb_opts else "",
             extra_params=smb_opts.extra_params if smb_opts else None,
         )
+    else:
+        props = await zfs.get_properties(name)
+        mountpoint = props.get("mountpoint", {}).get("value", f"/{name}")
+
+    # Make the mount point writable by authenticated users (0775).
+    # Without this, the root-owned default ZFS mount prevents users from
+    # creating files even though Samba/NFS authenticates them.
+    if os.path.isdir(mountpoint):
+        os.chmod(mountpoint, stat.S_IRWXU | stat.S_IRWXG | stat.S_IROTH | stat.S_IXOTH)  # 0o775
 
     await audit_log(user["username"], "dataset.share", name, detail=body.protocol)
     return {"message": f"Dataset {name} shared via {body.protocol}"}
