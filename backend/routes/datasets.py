@@ -7,15 +7,21 @@ and would match "smb-users/batman" as a dataset name otherwise.
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from fastapi.responses import PlainTextResponse
+
 from middleware.auth import get_current_user
 from models import (
     DatasetCreateRequest,
     DatasetDestroyRequest,
+    DatasetRenameRequest,
     InheritRequest,
     LoadKeyRequest,
     ChangeKeyRequest,
+    NfsClientDelete,
+    NfsClientEntry,
     PermissionSetRequest,
     PropertySetRequest,
+    SambaGlobalSettings,
     ShareAccessUpdate,
     ShareRequest,
     SmbUserCreate,
@@ -23,6 +29,7 @@ from models import (
 )
 from services import zfs
 from services import samba
+from services import nfs_exports
 from db import audit_log
 
 router = APIRouter()
@@ -135,6 +142,84 @@ async def change_smb_password(
     return {"message": f"Password changed for Samba user '{username}'"}
 
 
+# --- Samba Global Settings (fixed prefix — before /{name:path}) ---
+
+
+@router.get("/smb-global")
+async def get_smb_global(user: dict = Depends(get_current_user)):
+    """Get Samba global settings."""
+    return samba.get_global_settings()
+
+
+@router.patch("/smb-global")
+async def set_smb_global(body: SambaGlobalSettings, user: dict = Depends(get_current_user)):
+    """Update Samba global settings."""
+    try:
+        await samba.set_global_settings(
+            server_string=body.server_string,
+            workgroup=body.workgroup,
+            log_level=body.log_level,
+            map_to_guest=body.map_to_guest,
+            usershare_allow_guests=body.usershare_allow_guests,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "smb.global.update", "smb.conf")
+    return {"message": "Samba global settings updated"}
+
+
+@router.get("/smb-config-export")
+async def export_smb_config(user: dict = Depends(get_current_user)):
+    """Export managed Samba config as text."""
+    content = samba.export_managed_config()
+    return PlainTextResponse(content, media_type="text/plain")
+
+
+@router.post("/smb-config-import")
+async def import_smb_config(body: dict, user: dict = Depends(get_current_user)):
+    """Import managed Samba config."""
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(status_code=400, detail="No config content provided")
+    try:
+        await samba.import_managed_config(content)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "smb.config.import", "zfs-manager-shares.conf")
+    return {"message": "Samba config imported"}
+
+
+# --- NFS Exports (fixed prefix — before /{name:path}) ---
+
+
+@router.get("/nfs-exports")
+async def list_nfs_exports(user: dict = Depends(get_current_user)):
+    """List NFS per-client exports."""
+    return nfs_exports.list_exports()
+
+
+@router.post("/nfs-exports")
+async def add_nfs_export(body: NfsClientEntry, user: dict = Depends(get_current_user)):
+    """Add NFS client export entry."""
+    try:
+        await nfs_exports.add_export(body.path, body.client, body.options)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "nfs.export.add", body.path, detail=f"{body.client}({body.options})")
+    return {"message": f"NFS export added: {body.path} {body.client}"}
+
+
+@router.delete("/nfs-exports")
+async def remove_nfs_export(body: NfsClientDelete, user: dict = Depends(get_current_user)):
+    """Remove NFS client export entry."""
+    try:
+        await nfs_exports.remove_export(body.path, body.client)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "nfs.export.remove", body.path, detail=body.client)
+    return {"message": f"NFS export removed: {body.path} {body.client}"}
+
+
 # --- Dataset path routes (/{name:path} — must come LAST) ---
 
 
@@ -152,6 +237,17 @@ async def destroy_dataset(name: str, body: DatasetDestroyRequest, user: dict = D
     await zfs.destroy(name, recursive=body.recursive, force=body.force)
     await audit_log(user["username"], "dataset.destroy", name)
     return {"message": f"Dataset {name} destroyed"}
+
+
+@router.post("/{name:path}/rename")
+async def rename_dataset(name: str, body: DatasetRenameRequest, user: dict = Depends(get_current_user)):
+    """Rename a dataset."""
+    try:
+        await zfs.rename(name, body.new_name)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "dataset.rename", name, detail=f"-> {body.new_name}")
+    return {"message": f"Dataset {name} renamed to {body.new_name}"}
 
 
 @router.patch("/{name:path}/properties")
@@ -260,6 +356,7 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
             force_group=smb_opts.force_group if smb_opts else "",
             inherit_permissions=smb_opts.inherit_permissions if smb_opts else False,
             vfs_objects=smb_opts.vfs_objects if smb_opts else "",
+            extra_params=smb_opts.extra_params if smb_opts else None,
         )
 
     await audit_log(user["username"], "dataset.share", name, detail=body.protocol)

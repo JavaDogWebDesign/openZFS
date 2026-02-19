@@ -288,11 +288,26 @@ async def destroy_pool(pool: str, force: bool = False) -> None:
 # --- Import / Export ---
 
 
-async def import_pool(pool: str | None = None, force: bool = False) -> str:
+async def import_pool(
+    pool: str | None = None,
+    force: bool = False,
+    altroot: str = "",
+    readonly: bool = False,
+    recovery: bool = False,
+    missing_log: bool = False,
+) -> str:
     """Import a pool. If pool is None, returns list of importable pools."""
     cmd = ["zpool", "import"]
     if force:
         cmd.append("-f")
+    if altroot:
+        cmd.extend(["-R", altroot])
+    if readonly:
+        cmd.extend(["-o", "readonly=on"])
+    if recovery:
+        cmd.append("-F")
+    if missing_log:
+        cmd.append("-m")
     if pool:
         validate_pool_name(pool)
         cmd.extend(["--", pool])
@@ -461,6 +476,28 @@ async def set_property(pool: str, prop: str, value: str) -> None:
     stdout, stderr, rc = await run_cmd(cmd)
     if rc != 0:
         raise parse_zfs_error(stderr, rc)
+
+
+async def get_feature_flags(pool: str) -> list[dict[str, str]]:
+    """Get pool feature flags (feature@* properties)."""
+    validate_pool_name(pool)
+    cmd = ["zpool", "get", "all", "-Hp", "--", pool]
+    stdout, stderr, rc = await run_cmd(cmd)
+    if rc != 0:
+        raise parse_zfs_error(stderr, rc)
+
+    features = []
+    for line in stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 4 and parts[1].startswith("feature@"):
+            features.append({
+                "name": parts[1].replace("feature@", ""),
+                "value": parts[2],
+                "description": parts[1].replace("feature@", "").replace("_", " "),
+            })
+    return features
 
 
 def _to_int(value: str) -> int:

@@ -90,6 +90,12 @@ async def delete_schedule(schedule_id: str, user: dict = Depends(get_current_use
     return {"message": "Schedule deleted"}
 
 
+@router.get("/{pool}/features")
+async def get_pool_features(pool: str, user: dict = Depends(get_current_user)):
+    """Get pool feature flags."""
+    return await zpool.get_feature_flags(pool)
+
+
 @router.get("/{pool}")
 async def get_pool(pool: str, user: dict = Depends(get_current_user)):
     """Get detailed pool status and properties."""
@@ -214,7 +220,14 @@ async def get_history(pool: str, user: dict = Depends(get_current_user)):
 @router.post("/{pool}/import")
 async def import_pool(pool: str, body: ImportRequest, user: dict = Depends(get_current_user)):
     """Import a pool."""
-    await zpool.import_pool(pool, force=body.force)
+    await zpool.import_pool(
+        pool,
+        force=body.force,
+        altroot=body.altroot,
+        readonly=body.readonly,
+        recovery=body.recovery,
+        missing_log=body.missing_log,
+    )
     await audit_log(user["username"], "pool.import", pool)
     return {"message": f"Pool {pool} imported"}
 

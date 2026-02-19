@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Plus,
   RefreshCw,
@@ -23,11 +23,13 @@ import {
   destroyPool,
   importPool,
   getPoolHistory,
+  getPoolFeatures,
   listScrubSchedules,
   createScrubSchedule,
   deleteScrubSchedule,
   type PoolSummary,
   type PoolDetail,
+  type PoolFeature,
   type ScrubSchedule,
 } from "@/lib/api";
 import { disconnect as disconnectIostat, getCurrentPool } from "@/lib/iostat-store";
@@ -169,8 +171,19 @@ export function Pools(): JSX.Element {
   const [importFormOpen, setImportFormOpen] = useState(false);
   const [importName, setImportName] = useState("");
   const [importForce, setImportForce] = useState(false);
-  const importMut = useMutation((args: { name: string; force: boolean }) =>
-    importPool(args.name, args.force),
+  const [importAltroot, setImportAltroot] = useState("");
+  const [importReadonly, setImportReadonly] = useState(false);
+  const [importRecovery, setImportRecovery] = useState(false);
+  const [importMissingLog, setImportMissingLog] = useState(false);
+  const importMut = useMutation(
+    (args: { name: string; force: boolean; altroot: string; readonly: boolean; recovery: boolean; missing_log: boolean }) =>
+      importPool(args.name, {
+        force: args.force,
+        altroot: args.altroot,
+        readonly: args.readonly,
+        recovery: args.recovery,
+        missing_log: args.missing_log,
+      }),
   );
 
   /* Scrub pause/stop mutations */
@@ -184,6 +197,22 @@ export function Pools(): JSX.Element {
   const [historyLines, setHistoryLines] = useState<string[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+
+  /* Feature flags */
+  const [features, setFeatures] = useState<PoolFeature[] | null>(null);
+  const [featuresLoading, setFeaturesLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectedPool) {
+      setFeatures(null);
+      return;
+    }
+    setFeaturesLoading(true);
+    getPoolFeatures(selectedPool)
+      .then(setFeatures)
+      .catch(() => setFeatures(null))
+      .finally(() => setFeaturesLoading(false));
+  }, [selectedPool]);
 
   /* Pool wizard */
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -293,17 +322,28 @@ export function Pools(): JSX.Element {
 
   const handleImportPool = useCallback(async () => {
     if (!importName.trim()) return;
-    const result = await importMut.execute({ name: importName.trim(), force: importForce });
+    const result = await importMut.execute({
+      name: importName.trim(),
+      force: importForce,
+      altroot: importAltroot,
+      readonly: importReadonly,
+      recovery: importRecovery,
+      missing_log: importMissingLog,
+    });
     if (result) {
       addToast("success", `Pool "${importName.trim()}" imported successfully`);
       setImportFormOpen(false);
       setImportName("");
       setImportForce(false);
+      setImportAltroot("");
+      setImportReadonly(false);
+      setImportRecovery(false);
+      setImportMissingLog(false);
       refetch();
     } else if (importMut.error) {
       addToast("error", importMut.error);
     }
-  }, [importName, importForce, importMut, addToast, refetch]);
+  }, [importName, importForce, importAltroot, importReadonly, importRecovery, importMissingLog, importMut, addToast, refetch]);
 
   const handleScrubPause = useCallback(
     async (name: string) => {
@@ -426,6 +466,38 @@ export function Pools(): JSX.Element {
               />
               Force
             </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", fontSize: "var(--text-sm)" }}>
+              <input
+                type="checkbox"
+                checked={importReadonly}
+                onChange={(e) => setImportReadonly(e.target.checked)}
+              />
+              Read-only
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", fontSize: "var(--text-sm)" }}>
+              <input
+                type="checkbox"
+                checked={importRecovery}
+                onChange={(e) => setImportRecovery(e.target.checked)}
+              />
+              Recovery mode (-F)
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", fontSize: "var(--text-sm)" }}>
+              <input
+                type="checkbox"
+                checked={importMissingLog}
+                onChange={(e) => setImportMissingLog(e.target.checked)}
+              />
+              Missing log device (-m)
+            </label>
+            <input
+              className={css.select}
+              type="text"
+              placeholder="/mnt/altroot"
+              value={importAltroot}
+              onChange={(e) => setImportAltroot(e.target.value)}
+              style={{ minWidth: 150 }}
+            />
             <button
               className={css.btnPrimary}
               onClick={handleImportPool}
@@ -439,6 +511,10 @@ export function Pools(): JSX.Element {
                 setImportFormOpen(false);
                 setImportName("");
                 setImportForce(false);
+                setImportAltroot("");
+                setImportReadonly(false);
+                setImportRecovery(false);
+                setImportMissingLog(false);
               }}
             >
               Cancel
@@ -829,6 +905,56 @@ export function Pools(): JSX.Element {
                 <h2 className={css.cardTitle}>Pool Properties</h2>
                 <PropertyPanel properties={poolDetail.properties} />
               </div>
+            </div>
+
+            {/* Feature Flags */}
+            <div className={css.card} style={{ marginTop: "var(--space-4)" }}>
+              <h2 className={css.cardTitle}>Feature Flags</h2>
+              {featuresLoading ? (
+                <div className={css.loading} style={{ padding: "var(--space-4)" }}>Loading features...</div>
+              ) : !features || features.length === 0 ? (
+                <div className={css.empty}>No feature flags available</div>
+              ) : (
+                <div style={{ maxHeight: 400, overflowY: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "2px solid var(--color-border)" }}>
+                        <th style={{ textAlign: "left", padding: "var(--space-2)", fontSize: "var(--text-xs)", textTransform: "uppercase", color: "var(--color-text-muted)" }}>
+                          Feature Name
+                        </th>
+                        <th style={{ textAlign: "left", padding: "var(--space-2)", fontSize: "var(--text-xs)", textTransform: "uppercase", color: "var(--color-text-muted)" }}>
+                          Status
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {features.map((feat) => (
+                        <tr key={feat.name} style={{ borderBottom: "1px solid var(--color-border)" }}>
+                          <td className={css.mono} style={{ padding: "var(--space-2)" }} title={feat.description}>
+                            {feat.name}
+                          </td>
+                          <td style={{ padding: "var(--space-2)" }}>
+                            {feat.value === "enabled" ? (
+                              <span className={css.badgeSuccess}>{feat.value}</span>
+                            ) : feat.value === "disabled" ? (
+                              <span className={css.badgeMuted}>{feat.value}</span>
+                            ) : feat.value === "active" ? (
+                              <span
+                                className={css.badge}
+                                style={{ color: "white", background: "var(--color-accent)" }}
+                              >
+                                {feat.value}
+                              </span>
+                            ) : (
+                              <span className={css.badgeMuted}>{feat.value}</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             {/* History button and panel */}

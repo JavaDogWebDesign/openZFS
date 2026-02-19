@@ -185,10 +185,25 @@ export function getIostatHistory(pool: string) {
   );
 }
 
-export function importPool(pool: string, force = false) {
+export function importPool(
+  pool: string,
+  options: {
+    force?: boolean;
+    altroot?: string;
+    readonly?: boolean;
+    recovery?: boolean;
+    missing_log?: boolean;
+  } = {},
+) {
   return api.post<{ message: string }>(
     `/api/pools/${encodeURIComponent(pool)}/import`,
-    { force },
+    {
+      force: options.force ?? false,
+      altroot: options.altroot ?? "",
+      readonly: options.readonly ?? false,
+      recovery: options.recovery ?? false,
+      missing_log: options.missing_log ?? false,
+    },
   );
 }
 
@@ -322,6 +337,7 @@ export interface SmbOptions {
   force_group: string;
   inherit_permissions: boolean;
   vfs_objects: string;
+  extra_params: Record<string, string>;
 }
 
 export interface SmbConfig {
@@ -435,6 +451,7 @@ export interface SystemUser {
   full_name: string;
   home: string;
   shell: string;
+  locked: boolean;
 }
 
 export interface SystemGroup {
@@ -492,6 +509,137 @@ export function addUserToGroup(username: string, group: string) {
 export function removeUserFromGroup(username: string, group: string) {
   return api.del<{ message: string }>(
     `/api/users/${encodeURIComponent(username)}/groups/${encodeURIComponent(group)}`,
+  );
+}
+
+// --- Account management ---
+
+export interface AccountStatus {
+  locked: boolean;
+  expire_date: string;
+  max_days: number | null;
+  last_change: string;
+  password_expires: string;
+}
+
+export function getAccountStatus(username: string) {
+  return api.get<AccountStatus>(
+    `/api/users/${encodeURIComponent(username)}/status`,
+  );
+}
+
+export function lockAccount(username: string, locked: boolean) {
+  return api.patch<{ message: string }>(
+    `/api/users/${encodeURIComponent(username)}/lock`,
+    { locked },
+  );
+}
+
+export function forcePasswordChange(username: string) {
+  return api.post<{ message: string }>(
+    `/api/users/${encodeURIComponent(username)}/force-password-change`,
+  );
+}
+
+export function setAccountExpiration(username: string, expireDate: string, maxDays: number | null) {
+  return api.patch<{ message: string }>(
+    `/api/users/${encodeURIComponent(username)}/expiration`,
+    { expire_date: expireDate, max_days: maxDays },
+  );
+}
+
+export function changeShell(username: string, shell: string) {
+  return api.patch<{ message: string }>(
+    `/api/users/${encodeURIComponent(username)}/shell`,
+    { shell },
+  );
+}
+
+export function listShells() {
+  return api.get<string[]>("/api/users/shells");
+}
+
+export function renameGroup(name: string, newName: string) {
+  return api.patch<{ message: string }>(
+    `/api/users/groups/${encodeURIComponent(name)}/rename`,
+    { new_name: newName },
+  );
+}
+
+// --- Dataset rename ---
+
+export function renameDataset(name: string, newName: string) {
+  return api.post<{ message: string }>(
+    `/api/datasets/${encodePath(name)}/rename`,
+    { new_name: newName },
+  );
+}
+
+// --- Samba Global Settings ---
+
+export interface SambaGlobalSettings {
+  server_string: string;
+  workgroup: string;
+  log_level: number | null;
+  map_to_guest: string;
+  usershare_allow_guests: boolean | null;
+}
+
+export function getSambaGlobalSettings() {
+  return api.get<SambaGlobalSettings>("/api/datasets/smb-global");
+}
+
+export function setSambaGlobalSettings(settings: Partial<SambaGlobalSettings>) {
+  return api.patch<{ message: string }>("/api/datasets/smb-global", settings);
+}
+
+export function exportSambaConfig() {
+  return fetch("/api/datasets/smb-config-export", { credentials: "same-origin" })
+    .then((res) => res.text());
+}
+
+export function importSambaConfig(content: string) {
+  return api.post<{ message: string }>("/api/datasets/smb-config-import", { content });
+}
+
+// --- NFS Exports ---
+
+export interface NfsExport {
+  path: string;
+  client: string;
+  options: string;
+}
+
+export function listNfsExports() {
+  return api.get<NfsExport[]>("/api/datasets/nfs-exports");
+}
+
+export function addNfsExport(path: string, client: string, options: string) {
+  return api.post<{ message: string }>("/api/datasets/nfs-exports", {
+    path,
+    client,
+    options,
+  });
+}
+
+export function removeNfsExport(path: string, client: string) {
+  return api.del<{ message: string }>("/api/datasets/nfs-exports", {
+    path,
+    client,
+  });
+}
+
+// --- Pool Feature Flags ---
+
+export interface PoolFeature {
+  name: string;
+  value: string;
+  description: string;
+}
+
+export function getPoolFeatures(pool: string) {
+  return api.get<PoolFeature[]>(
+    `/api/pools/${encodeURIComponent(pool)}/features`,
   );
 }
 

@@ -79,6 +79,10 @@ class ReplaceRequest(BaseModel):
 
 class ImportRequest(BaseModel):
     force: bool = False
+    altroot: str = ""
+    readonly: bool = False
+    recovery: bool = False
+    missing_log: bool = False
 
 
 # --- Datasets ---
@@ -126,6 +130,7 @@ class SmbOptions(BaseModel):
     force_group: str = ""
     inherit_permissions: bool = False
     vfs_objects: str = ""
+    extra_params: dict[str, str] = Field(default_factory=dict)
 
 
 class ShareRequest(BaseModel):
@@ -330,3 +335,59 @@ class GroupDelete(BaseModel):
 
 class ShareAccessUpdate(BaseModel):
     valid_users: str = ""
+
+
+# --- Account Management ---
+
+
+class AccountStatusUpdate(BaseModel):
+    locked: bool
+
+
+class ForcePasswordChange(BaseModel):
+    pass
+
+
+class AccountExpiration(BaseModel):
+    expire_date: str = ""
+    max_days: int | None = None
+
+
+class ShellChange(BaseModel):
+    shell: str
+
+
+class GroupRename(BaseModel):
+    new_name: str = Field(..., pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
+# --- Dataset Rename ---
+
+
+class DatasetRenameRequest(BaseModel):
+    new_name: str
+
+
+# --- Samba Global Settings ---
+
+
+class SambaGlobalSettings(BaseModel):
+    server_string: str = ""
+    workgroup: str = ""
+    log_level: int | None = None
+    map_to_guest: str = ""
+    usershare_allow_guests: bool | None = None
+
+
+# --- NFS Client Exports ---
+
+
+class NfsClientEntry(BaseModel):
+    path: str
+    client: str
+    options: str = "rw,sync,no_subtree_check"
+
+
+class NfsClientDelete(BaseModel):
+    path: str
+    client: str

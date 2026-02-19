@@ -10,10 +10,19 @@ import {
   changeSmbPassword,
   listSmbShares,
   updateShareAccess,
+  getSambaGlobalSettings,
+  setSambaGlobalSettings,
+  exportSambaConfig,
+  importSambaConfig,
+  listNfsExports,
+  addNfsExport,
+  removeNfsExport,
   type DatasetSummary,
   type SmbOptions as ApiSmbOptions,
   type SmbUser,
   type SmbShareInfo,
+  type NfsExport,
+  type SambaGlobalSettings as ApiSambaGlobalSettings,
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { useToast } from "@/components/Toast";
@@ -31,6 +40,11 @@ import {
   ChevronRight,
   Trash2,
   KeyRound,
+  Settings,
+  Download,
+  Upload,
+  Plus,
+  Globe,
 } from "lucide-react";
 import s from "@/styles/views.module.css";
 
@@ -71,6 +85,7 @@ interface SmbOptions {
   forceGroup: string;
   inheritPermissions: boolean;
   vfsObjects: string;
+  extra_params: Record<string, string>;
 }
 
 const DEFAULT_NFS: NfsOptions = {
@@ -93,6 +108,7 @@ const DEFAULT_SMB: SmbOptions = {
   forceGroup: "",
   inheritPermissions: false,
   vfsObjects: "",
+  extra_params: {},
 };
 
 function buildNfsOptions(opts: NfsOptions): string {
@@ -132,6 +148,24 @@ export function Sharing() {
   const [newSmbShares, setNewSmbShares] = useState<string[]>([]);
   const [changePwUser, setChangePwUser] = useState<string | null>(null);
   const [changePwValue, setChangePwValue] = useState("");
+
+  // SMB Share Presets
+  const [presetShadow, setPresetShadow] = useState(false);
+  const [presetMacOs, setPresetMacOs] = useState(false);
+  const [presetAudit, setPresetAudit] = useState(false);
+
+  // NFS Client Access state
+  const [newNfsPath, setNewNfsPath] = useState("");
+  const [newNfsClient, setNewNfsClient] = useState("");
+  const [newNfsOptions, setNewNfsOptions] = useState("rw,sync,no_subtree_check");
+
+  // Samba Global Settings state
+  const [sambaServerString, setSambaServerString] = useState("");
+  const [sambaWorkgroup, setSambaWorkgroup] = useState("");
+  const [sambaLogLevel, setSambaLogLevel] = useState<number>(0);
+  const [sambaSettingsLoaded, setSambaSettingsLoaded] = useState(false);
+  const [showImportConfig, setShowImportConfig] = useState(false);
+  const [importConfigText, setImportConfigText] = useState("");
 
   // Connection info toggle state
   const [expandedConnect, setExpandedConnect] = useState<string | null>(null);
@@ -174,6 +208,41 @@ export function Sharing() {
     data: smbShares,
     refetch: refetchSmbShares,
   } = useApi(() => listSmbShares(), []);
+
+  // NFS Exports
+  const {
+    data: nfsExports,
+    loading: nfsExportsLoading,
+    refetch: refetchNfsExports,
+  } = useApi(() => listNfsExports(), []);
+
+  const addNfsExportMutation = useMutation((path: string, client: string, options: string) =>
+    addNfsExport(path, client, options),
+  );
+  const removeNfsExportMutation = useMutation((path: string, client: string) =>
+    removeNfsExport(path, client),
+  );
+
+  // Samba Global Settings
+  const {
+    data: sambaGlobalData,
+    refetch: refetchSambaGlobal,
+  } = useApi(() => getSambaGlobalSettings(), []);
+
+  // Sync samba global settings to local state when loaded
+  if (sambaGlobalData && !sambaSettingsLoaded) {
+    setSambaServerString(sambaGlobalData.server_string ?? "");
+    setSambaWorkgroup(sambaGlobalData.workgroup ?? "");
+    setSambaLogLevel(sambaGlobalData.log_level ?? 0);
+    setSambaSettingsLoaded(true);
+  }
+
+  const saveSambaGlobalMutation = useMutation((settings: Partial<ApiSambaGlobalSettings>) =>
+    setSambaGlobalSettings(settings),
+  );
+  const importSambaConfigMutation = useMutation((content: string) =>
+    importSambaConfig(content),
+  );
 
   // Load detailed properties for all datasets
   const loadDetails = useCallback(async () => {
@@ -249,34 +318,80 @@ export function Sharing() {
     [datasets],
   );
 
+  /** Compute the merged VFS objects string and extra_params from presets + manual input */
+  const computePresets = () => {
+    const vfsParts: string[] = [];
+    const extraParams: Record<string, string> = {};
+
+    if (presetShadow) {
+      vfsParts.push("shadow_copy2");
+      extraParams["shadow:snapdir"] = ".zfs/snapshot";
+      extraParams["shadow:sort"] = "desc";
+    }
+    if (presetMacOs) {
+      vfsParts.push("catia", "fruit", "streams_xattr");
+      extraParams["fruit:metadata"] = "stream";
+      extraParams["fruit:posix_rename"] = "yes";
+      extraParams["fruit:encoding"] = "native";
+    }
+    if (presetAudit) {
+      vfsParts.push("full_audit");
+      extraParams["full_audit:prefix"] = "%u|%I|%m|%S";
+      extraParams["full_audit:success"] = "connect disconnect mkdir rmdir open rename unlink";
+      extraParams["full_audit:failure"] = "connect";
+    }
+
+    // Merge manual VFS objects (avoid duplicates)
+    const manualVfs = smbOpts.vfsObjects.trim();
+    if (manualVfs) {
+      for (const v of manualVfs.split(/\s+/)) {
+        if (!vfsParts.includes(v)) vfsParts.push(v);
+      }
+    }
+
+    // Merge manual extra_params
+    for (const [k, v] of Object.entries(smbOpts.extra_params)) {
+      if (!(k in extraParams)) extraParams[k] = v;
+    }
+
+    return { vfsObjects: vfsParts.join(" "), extraParams };
+  };
+
   const handleShare = async () => {
     if (!newShareDataset) return;
     const options =
       newShareProtocol === "nfs"
         ? buildNfsOptions(nfsOpts)
         : buildSmbOptions(smbOpts);
-    const apiSmbOpts: ApiSmbOptions | undefined =
-      newShareProtocol === "smb"
-        ? {
-            guest_ok: smbOpts.guestOk,
-            browseable: smbOpts.browseable,
-            read_only: smbOpts.readOnly,
-            valid_users: smbOpts.validUsers,
-            write_list: smbOpts.writeList,
-            create_mask: smbOpts.createMask,
-            directory_mask: smbOpts.directoryMask,
-            force_user: smbOpts.forceUser,
-            force_group: smbOpts.forceGroup,
-            inherit_permissions: smbOpts.inheritPermissions,
-            vfs_objects: smbOpts.vfsObjects,
-          }
-        : undefined;
+
+    let apiSmbOpts: ApiSmbOptions | undefined;
+    if (newShareProtocol === "smb") {
+      const { vfsObjects, extraParams } = computePresets();
+      apiSmbOpts = {
+        guest_ok: smbOpts.guestOk,
+        browseable: smbOpts.browseable,
+        read_only: smbOpts.readOnly,
+        valid_users: smbOpts.validUsers,
+        write_list: smbOpts.writeList,
+        create_mask: smbOpts.createMask,
+        directory_mask: smbOpts.directoryMask,
+        force_user: smbOpts.forceUser,
+        force_group: smbOpts.forceGroup,
+        inherit_permissions: smbOpts.inheritPermissions,
+        vfs_objects: vfsObjects,
+        extra_params: extraParams,
+      };
+    }
+
     const result = await shareMutation.execute(newShareDataset, newShareProtocol, options, apiSmbOpts);
     if (result) {
       addToast("success", `Shared ${newShareDataset} via ${newShareProtocol.toUpperCase()}`);
       setNewShareDataset("");
       setNfsOpts({ ...DEFAULT_NFS });
       setSmbOpts({ ...DEFAULT_SMB });
+      setPresetShadow(false);
+      setPresetMacOs(false);
+      setPresetAudit(false);
       loadDetails();
     } else if (shareMutation.error) {
       addToast("error", shareMutation.error);
@@ -298,6 +413,9 @@ export function Sharing() {
     loadDetails();
     refetchSmbUsers();
     refetchSmbShares();
+    refetchNfsExports();
+    refetchSambaGlobal();
+    setSambaSettingsLoaded(false);
   };
 
   const handleAddSmbUser = async () => {
@@ -349,6 +467,87 @@ export function Sharing() {
     } else if (changeSmbPwMutation.error) {
       addToast("error", changeSmbPwMutation.error);
     }
+  };
+
+  // --- NFS Export handlers ---
+  const handleAddNfsExport = async () => {
+    if (!newNfsPath || !newNfsClient) return;
+    const result = await addNfsExportMutation.execute(newNfsPath, newNfsClient, newNfsOptions);
+    if (result) {
+      addToast("success", `NFS export added: ${newNfsPath} for ${newNfsClient}`);
+      setNewNfsPath("");
+      setNewNfsClient("");
+      setNewNfsOptions("rw,sync,no_subtree_check");
+      refetchNfsExports();
+    } else if (addNfsExportMutation.error) {
+      addToast("error", addNfsExportMutation.error);
+    }
+  };
+
+  const handleRemoveNfsExport = async (path: string, client: string) => {
+    const result = await removeNfsExportMutation.execute(path, client);
+    if (result) {
+      addToast("success", `NFS export removed: ${path} for ${client}`);
+      refetchNfsExports();
+    } else if (removeNfsExportMutation.error) {
+      addToast("error", removeNfsExportMutation.error);
+    }
+  };
+
+  // --- Samba Global Settings handlers ---
+  const handleSaveSambaGlobal = async () => {
+    const result = await saveSambaGlobalMutation.execute({
+      server_string: sambaServerString,
+      workgroup: sambaWorkgroup,
+      log_level: sambaLogLevel,
+    });
+    if (result) {
+      addToast("success", "Samba global settings saved");
+      refetchSambaGlobal();
+    } else if (saveSambaGlobalMutation.error) {
+      addToast("error", saveSambaGlobalMutation.error);
+    }
+  };
+
+  const handleExportSambaConfig = async () => {
+    try {
+      const content = await exportSambaConfig();
+      const blob = new Blob([content], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "zfs-manager-shares.conf";
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast("success", "Samba config downloaded");
+    } catch (err) {
+      addToast("error", err instanceof Error ? err.message : "Failed to export config");
+    }
+  };
+
+  const handleImportSambaConfig = async () => {
+    if (!importConfigText.trim()) return;
+    const result = await importSambaConfigMutation.execute(importConfigText);
+    if (result) {
+      addToast("success", "Samba config imported successfully");
+      setShowImportConfig(false);
+      setImportConfigText("");
+      refetchSambaGlobal();
+      refetchSmbShares();
+      loadDetails();
+    } else if (importSambaConfigMutation.error) {
+      addToast("error", importSambaConfigMutation.error);
+    }
+  };
+
+  const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImportConfigText(reader.result as string);
+    };
+    reader.readAsText(file);
   };
 
   // Computed preview string
@@ -853,9 +1052,57 @@ export function Sharing() {
                   All file operations use this group regardless of client identity.
                 </div>
               </div>
+              {/* Presets */}
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ display: "block", marginBottom: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+                  Presets
+                </label>
+                <div style={{ display: "flex", gap: "var(--space-4)", flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={presetShadow}
+                        onChange={(e) => setPresetShadow(e.target.checked)}
+                      />
+                      Shadow Copy
+                    </label>
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", paddingLeft: "var(--space-5)" }}>
+                      Enable Windows "Previous Versions" via ZFS snapshots (shadow_copy2).
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={presetMacOs}
+                        onChange={(e) => setPresetMacOs(e.target.checked)}
+                      />
+                      macOS (fruit)
+                    </label>
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", paddingLeft: "var(--space-5)" }}>
+                      Optimized for macOS clients with Spotlight, resource forks, and Time Machine support.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={presetAudit}
+                        onChange={(e) => setPresetAudit(e.target.checked)}
+                      />
+                      Audit Log
+                    </label>
+                    <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", paddingLeft: "var(--space-5)" }}>
+                      Log file operations (connect, mkdir, open, rename, unlink) to syslog via full_audit.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div style={{ gridColumn: "1 / -1" }}>
                 <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
-                  VFS objects
+                  VFS objects (additional)
                 </label>
                 <input
                   className={s.input}
@@ -865,7 +1112,7 @@ export function Sharing() {
                   onChange={(e) => setSmbOpts((o) => ({ ...o, vfsObjects: e.target.value }))}
                 />
                 <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: 2 }}>
-                  Space-separated VFS modules. Common: <code>recycle</code> (recycle bin), <code>shadow_copy2</code> (Previous Versions from ZFS snapshots).
+                  Space-separated VFS modules to add beyond those enabled by presets. Common: <code>recycle</code> (recycle bin).
                 </div>
               </div>
               <div style={{ gridColumn: "1 / -1" }}>
@@ -904,21 +1151,25 @@ export function Sharing() {
               <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", flexShrink: 0 }}>Preview:</span>
               {newShareProtocol === "smb" ? (
                 <pre className={s.mono} style={{ fontSize: "var(--text-xs)", margin: 0, whiteSpace: "pre" }}>
-{[
-  `[${newShareDataset.replace("/", "_")}]`,
-  `  path = /${newShareDataset}`,
-  `  guest ok = ${smbOpts.guestOk ? "yes" : "no"}`,
-  `  browseable = ${smbOpts.browseable ? "yes" : "no"}`,
-  `  read only = ${smbOpts.readOnly ? "yes" : "no"}`,
-  smbOpts.validUsers ? `  valid users = ${smbOpts.validUsers}` : "",
-  smbOpts.writeList ? `  write list = ${smbOpts.writeList}` : "",
-  smbOpts.createMask ? `  create mask = ${smbOpts.createMask}` : "",
-  smbOpts.directoryMask ? `  directory mask = ${smbOpts.directoryMask}` : "",
-  smbOpts.forceUser ? `  force user = ${smbOpts.forceUser}` : "",
-  smbOpts.forceGroup ? `  force group = ${smbOpts.forceGroup}` : "",
-  smbOpts.inheritPermissions ? "  inherit permissions = yes" : "",
-  smbOpts.vfsObjects ? `  vfs objects = ${smbOpts.vfsObjects}` : "",
-].filter(Boolean).join("\n")}
+{(() => {
+  const { vfsObjects: pVfs, extraParams: pExtra } = computePresets();
+  return [
+    `[${newShareDataset.replace("/", "_")}]`,
+    `  path = /${newShareDataset}`,
+    `  guest ok = ${smbOpts.guestOk ? "yes" : "no"}`,
+    `  browseable = ${smbOpts.browseable ? "yes" : "no"}`,
+    `  read only = ${smbOpts.readOnly ? "yes" : "no"}`,
+    smbOpts.validUsers ? `  valid users = ${smbOpts.validUsers}` : "",
+    smbOpts.writeList ? `  write list = ${smbOpts.writeList}` : "",
+    smbOpts.createMask ? `  create mask = ${smbOpts.createMask}` : "",
+    smbOpts.directoryMask ? `  directory mask = ${smbOpts.directoryMask}` : "",
+    smbOpts.forceUser ? `  force user = ${smbOpts.forceUser}` : "",
+    smbOpts.forceGroup ? `  force group = ${smbOpts.forceGroup}` : "",
+    smbOpts.inheritPermissions ? "  inherit permissions = yes" : "",
+    pVfs ? `  vfs objects = ${pVfs}` : "",
+    ...Object.entries(pExtra).map(([k, v]) => `  ${k} = ${v}`),
+  ].filter(Boolean).join("\n");
+})()}
                 </pre>
               ) : (
                 <code className={s.mono} style={{ fontSize: "var(--text-sm)" }}>
@@ -1125,6 +1376,301 @@ export function Sharing() {
               </div>
               <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
                 Leave unchecked to add the user without granting access to any specific share.
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* NFS Client Access Section */}
+      <div className={s.card}>
+        <h2 className={s.cardTitle}>
+          <Globe
+            size={16}
+            style={{ marginRight: "var(--space-2)", verticalAlign: "middle" }}
+          />
+          NFS Client Access
+        </h2>
+
+        <div
+          style={{
+            background: "var(--color-bg-surface)",
+            border: "1px solid var(--color-border)",
+            borderRadius: "var(--radius-sm)",
+            padding: "var(--space-2) var(--space-3)",
+            fontSize: "var(--text-xs)",
+            color: "var(--color-text-muted)",
+            marginBottom: "var(--space-3)",
+          }}
+        >
+          Per-client NFS export rules managed in <code>/etc/exports.d/zfs-manager.exports</code>.
+          These control which hosts can access NFS-shared datasets and with what options.
+        </div>
+
+        {nfsExportsLoading ? (
+          <div className={s.loading}>Loading NFS exports...</div>
+        ) : !nfsExports || nfsExports.length === 0 ? (
+          <div className={s.empty}>
+            <Globe size={24} style={{ marginBottom: "var(--space-2)", opacity: 0.5 }} />
+            <div>No per-client NFS export rules configured.</div>
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "var(--space-3)" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--color-border)", textAlign: "left" }}>
+                <th style={{ padding: "var(--space-2) var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
+                  Path
+                </th>
+                <th style={{ padding: "var(--space-2) var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
+                  Client
+                </th>
+                <th style={{ padding: "var(--space-2) var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
+                  Options
+                </th>
+                <th style={{ padding: "var(--space-2) var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase" }}>
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {nfsExports.map((exp: NfsExport, idx: number) => (
+                <tr key={`${exp.path}-${exp.client}-${idx}`} style={{ borderBottom: "1px solid var(--color-border)" }}>
+                  <td className={s.mono} style={{ padding: "var(--space-3)" }}>
+                    {exp.path}
+                  </td>
+                  <td className={s.mono} style={{ padding: "var(--space-3)" }}>
+                    {exp.client}
+                  </td>
+                  <td className={s.mono} style={{ padding: "var(--space-3)" }}>
+                    {exp.options}
+                  </td>
+                  <td style={{ padding: "var(--space-3)" }}>
+                    <button
+                      className={s.btnDanger}
+                      onClick={() => handleRemoveNfsExport(exp.path, exp.client)}
+                      disabled={removeNfsExportMutation.loading}
+                      style={{ display: "flex", alignItems: "center", gap: 4 }}
+                    >
+                      <Trash2 size={12} /> {removeNfsExportMutation.loading ? "..." : "Remove"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* Add NFS Export form */}
+        <div
+          style={{
+            paddingTop: "var(--space-3)",
+            borderTop: "1px solid var(--color-border)",
+          }}
+        >
+          <h3 style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)" }}>
+            Add Export
+          </h3>
+          {addNfsExportMutation.error && (
+            <div className={s.error} style={{ marginBottom: "var(--space-2)" }}>{addNfsExportMutation.error}</div>
+          )}
+          <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div>
+              <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                Path
+              </label>
+              <input
+                className={s.input}
+                placeholder="/pool/dataset"
+                value={newNfsPath}
+                onChange={(e) => setNewNfsPath(e.target.value)}
+                list="nfs-path-options"
+              />
+              <datalist id="nfs-path-options">
+                {datasets?.map((ds: DatasetSummary) => (
+                  <option key={ds.name} value={ds.mountpoint || `/${ds.name}`} />
+                ))}
+              </datalist>
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                Client
+              </label>
+              <input
+                className={s.input}
+                placeholder="192.168.1.0/24"
+                value={newNfsClient}
+                onChange={(e) => setNewNfsClient(e.target.value)}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                Options
+              </label>
+              <input
+                className={s.input}
+                placeholder="rw,sync,no_subtree_check"
+                value={newNfsOptions}
+                onChange={(e) => setNewNfsOptions(e.target.value)}
+                style={{ width: 220 }}
+              />
+            </div>
+            <button
+              className={s.btnPrimary}
+              onClick={handleAddNfsExport}
+              disabled={addNfsExportMutation.loading || !newNfsPath || !newNfsClient}
+              style={{ display: "flex", alignItems: "center", gap: 4 }}
+            >
+              <Plus size={14} />
+              {addNfsExportMutation.loading ? "Adding..." : "Add"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Samba Global Settings Section */}
+      <div className={s.card}>
+        <h2 className={s.cardTitle}>
+          <Settings
+            size={16}
+            style={{ marginRight: "var(--space-2)", verticalAlign: "middle" }}
+          />
+          Samba Global Settings
+        </h2>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr 1fr",
+            gap: "var(--space-3)",
+            marginBottom: "var(--space-3)",
+          }}
+        >
+          <div>
+            <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+              Server String
+            </label>
+            <input
+              className={s.input}
+              style={{ width: "100%" }}
+              placeholder="ZFS Manager Samba Server"
+              value={sambaServerString}
+              onChange={(e) => setSambaServerString(e.target.value)}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+              Workgroup
+            </label>
+            <input
+              className={s.input}
+              style={{ width: "100%" }}
+              placeholder="WORKGROUP"
+              value={sambaWorkgroup}
+              onChange={(e) => setSambaWorkgroup(e.target.value)}
+            />
+          </div>
+          <div>
+            <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+              Log Level
+            </label>
+            <select
+              className={s.select}
+              style={{ width: "100%" }}
+              value={sambaLogLevel}
+              onChange={(e) => setSambaLogLevel(Number(e.target.value))}
+            >
+              <option value={0}>0 (minimal)</option>
+              <option value={1}>1 (normal)</option>
+              <option value={2}>2 (verbose)</option>
+              <option value={3}>3 (debug)</option>
+            </select>
+          </div>
+        </div>
+
+        {saveSambaGlobalMutation.error && (
+          <div className={s.error} style={{ marginBottom: "var(--space-3)" }}>{saveSambaGlobalMutation.error}</div>
+        )}
+
+        <div style={{ display: "flex", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
+          <button
+            className={s.btnPrimary}
+            onClick={handleSaveSambaGlobal}
+            disabled={saveSambaGlobalMutation.loading}
+          >
+            {saveSambaGlobalMutation.loading ? "Saving..." : "Save"}
+          </button>
+        </div>
+
+        <div
+          style={{
+            paddingTop: "var(--space-3)",
+            borderTop: "1px solid var(--color-border)",
+          }}
+        >
+          <h3 style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--space-2)" }}>
+            Configuration File
+          </h3>
+          <div style={{ display: "flex", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+            <button
+              className={s.btnGhost}
+              onClick={handleExportSambaConfig}
+              style={{ display: "flex", alignItems: "center", gap: 4 }}
+            >
+              <Download size={14} /> Export Config
+            </button>
+            <button
+              className={s.btnGhost}
+              onClick={() => setShowImportConfig(!showImportConfig)}
+              style={{ display: "flex", alignItems: "center", gap: 4 }}
+            >
+              <Upload size={14} /> Import Config
+            </button>
+          </div>
+
+          {showImportConfig && (
+            <div
+              style={{
+                background: "var(--color-bg-surface)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "var(--space-3)",
+              }}
+            >
+              <div style={{ marginBottom: "var(--space-2)" }}>
+                <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                  Upload a .conf file or paste contents below
+                </label>
+                <input
+                  type="file"
+                  accept=".conf,.txt"
+                  onChange={handleImportFile}
+                  style={{ marginBottom: "var(--space-2)", fontSize: "var(--text-xs)" }}
+                />
+              </div>
+              <textarea
+                className={s.input}
+                style={{ width: "100%", minHeight: 120, fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}
+                placeholder="Paste Samba config here..."
+                value={importConfigText}
+                onChange={(e) => setImportConfigText(e.target.value)}
+              />
+              {importSambaConfigMutation.error && (
+                <div className={s.error} style={{ marginTop: "var(--space-2)" }}>{importSambaConfigMutation.error}</div>
+              )}
+              <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
+                <button
+                  className={s.btnPrimary}
+                  onClick={handleImportSambaConfig}
+                  disabled={importSambaConfigMutation.loading || !importConfigText.trim()}
+                >
+                  {importSambaConfigMutation.loading ? "Importing..." : "Confirm Import"}
+                </button>
+                <button
+                  className={s.btnGhost}
+                  onClick={() => { setShowImportConfig(false); setImportConfigText(""); }}
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           )}

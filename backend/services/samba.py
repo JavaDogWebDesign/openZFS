@@ -83,6 +83,7 @@ async def set_share(
     force_group: str = "",
     inherit_permissions: bool = False,
     vfs_objects: str = "",
+    extra_params: dict[str, str] | None = None,
 ) -> str:
     """Write or update a share section in the include file.
 
@@ -122,6 +123,11 @@ async def set_share(
         cp.set(share_name, "inherit permissions", "yes")
     elif cp.has_option(share_name, "inherit permissions"):
         cp.remove_option(share_name, "inherit permissions")
+
+    # Extra params from presets (shadow_copy2, macOS, audit, etc.)
+    if extra_params:
+        for key, value in extra_params.items():
+            cp.set(share_name, key, value)
 
     cp.set(share_name, "# managed by", "zfs-manager")
 
@@ -282,3 +288,87 @@ async def change_password(username: str, password: str) -> None:
         logger.error("smbpasswd password change failed for %s: %s", username, err)
         raise RuntimeError(f"Failed to change password for '{username}': {err}")
     logger.info("Changed Samba password for: %s", username)
+
+
+# --- Samba global settings ---
+
+
+_GLOBAL_KEYS = {"server string", "workgroup", "log level", "map to guest", "usershare allow guests"}
+
+
+def get_global_settings() -> dict:
+    """Read key settings from smb.conf [global] section."""
+    cp = configparser.ConfigParser()
+    if SAMBA_CONF.exists():
+        cp.read(str(SAMBA_CONF))
+
+    result = {}
+    if cp.has_section("global"):
+        result["server_string"] = cp.get("global", "server string", fallback="")
+        result["workgroup"] = cp.get("global", "workgroup", fallback="")
+        log_level = cp.get("global", "log level", fallback="")
+        result["log_level"] = int(log_level) if log_level.isdigit() else None
+        result["map_to_guest"] = cp.get("global", "map to guest", fallback="")
+        usershare = cp.get("global", "usershare allow guests", fallback="")
+        result["usershare_allow_guests"] = usershare.lower() == "yes" if usershare else None
+    return result
+
+
+async def set_global_settings(
+    server_string: str = "",
+    workgroup: str = "",
+    log_level: int | None = None,
+    map_to_guest: str = "",
+    usershare_allow_guests: bool | None = None,
+) -> None:
+    """Update smb.conf [global] section values, then reload smbd."""
+    if not SAMBA_CONF.exists():
+        raise RuntimeError("smb.conf not found")
+
+    cp = configparser.ConfigParser()
+    cp.read(str(SAMBA_CONF))
+
+    if not cp.has_section("global"):
+        cp.add_section("global")
+
+    settings = {
+        "server string": server_string,
+        "workgroup": workgroup,
+        "log level": str(log_level) if log_level is not None else "",
+        "map to guest": map_to_guest,
+        "usershare allow guests": "yes" if usershare_allow_guests is True else ("no" if usershare_allow_guests is False else ""),
+    }
+
+    for key, value in settings.items():
+        if value:
+            cp.set("global", key, value)
+        elif cp.has_option("global", key):
+            # Only remove if explicitly empty and existed before
+            pass  # Leave existing values if new value is empty
+
+    with SAMBA_CONF.open("w") as f:
+        cp.write(f)
+
+    await _reload_smbd()
+    logger.info("Updated Samba global settings")
+
+
+def export_managed_config() -> str:
+    """Return the managed include file content as a string."""
+    if INCLUDE_CONF.exists():
+        return INCLUDE_CONF.read_text()
+    return ""
+
+
+async def import_managed_config(content: str) -> None:
+    """Validate and write managed config, then reload smbd."""
+    # Validate that configparser can parse it
+    cp = configparser.ConfigParser()
+    try:
+        cp.read_string(content)
+    except configparser.Error as e:
+        raise ValueError(f"Invalid Samba config format: {e}")
+
+    INCLUDE_CONF.write_text(content)
+    await _reload_smbd()
+    logger.info("Imported managed Samba config")

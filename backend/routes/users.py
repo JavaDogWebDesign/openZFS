@@ -4,11 +4,16 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from middleware.auth import get_current_user
 from models import (
-    SystemUserCreate,
-    SystemUserDelete,
-    SystemPasswordChange,
+    AccountExpiration,
+    AccountStatusUpdate,
+    ForcePasswordChange,
     GroupCreate,
     GroupDelete,
+    GroupRename,
+    ShellChange,
+    SystemPasswordChange,
+    SystemUserCreate,
+    SystemUserDelete,
 )
 from services import users
 from db import audit_log
@@ -50,6 +55,26 @@ async def delete_group(name: str, body: GroupDelete, user: dict = Depends(get_cu
         raise HTTPException(status_code=400, detail=str(e))
     await audit_log(user["username"], "group.delete", name)
     return {"message": f"Group '{name}' deleted"}
+
+
+@router.patch("/groups/{name}/rename")
+async def rename_group(name: str, body: GroupRename, user: dict = Depends(get_current_user)):
+    """Rename a system group."""
+    try:
+        await users.rename_group(name, body.new_name)
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "group.rename", f"{name} -> {body.new_name}")
+    return {"message": f"Group '{name}' renamed to '{body.new_name}'"}
+
+
+# --- Shells (before /{username} routes) ---
+
+
+@router.get("/shells")
+async def list_shells(user: dict = Depends(get_current_user)):
+    """List available login shells from /etc/shells."""
+    return await users.list_shells()
 
 
 # --- Users ---
@@ -107,6 +132,81 @@ async def change_system_password(
         raise HTTPException(status_code=400, detail=str(e))
     await audit_log(user["username"], "user.password", username)
     return {"message": f"Password changed for '{username}'"}
+
+
+# --- Account management ---
+
+
+@router.get("/{username}/status")
+async def get_account_status(username: str, user: dict = Depends(get_current_user)):
+    """Get account lock/expiration status."""
+    try:
+        return await users.get_account_status(username)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/{username}/lock")
+async def lock_account(
+    username: str,
+    body: AccountStatusUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Lock or unlock a user account."""
+    try:
+        if body.locked:
+            await users.lock_account(username)
+        else:
+            await users.unlock_account(username)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    action = "locked" if body.locked else "unlocked"
+    await audit_log(user["username"], f"user.{action}", username)
+    return {"message": f"Account '{username}' {action}"}
+
+
+@router.post("/{username}/force-password-change")
+async def force_password_change(
+    username: str,
+    user: dict = Depends(get_current_user),
+):
+    """Force a password change on next login."""
+    try:
+        await users.force_password_change(username)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "user.force-pw-change", username)
+    return {"message": f"Password change forced for '{username}'"}
+
+
+@router.patch("/{username}/expiration")
+async def set_account_expiration(
+    username: str,
+    body: AccountExpiration,
+    user: dict = Depends(get_current_user),
+):
+    """Set account/password expiration."""
+    try:
+        await users.set_account_expiration(username, body.expire_date, body.max_days)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "user.expiration", username)
+    return {"message": f"Expiration updated for '{username}'"}
+
+
+@router.patch("/{username}/shell")
+async def change_shell(
+    username: str,
+    body: ShellChange,
+    user: dict = Depends(get_current_user),
+):
+    """Change a user's login shell."""
+    try:
+        await users.change_shell(username, body.shell)
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await audit_log(user["username"], "user.shell", username, detail=body.shell)
+    return {"message": f"Shell changed for '{username}' to '{body.shell}'"}
 
 
 # --- Group membership ---

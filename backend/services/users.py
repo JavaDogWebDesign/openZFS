@@ -35,7 +35,8 @@ async def list_system_users() -> list[dict]:
     if proc.returncode != 0:
         raise RuntimeError(f"getent passwd failed: {stderr.decode().strip()}")
 
-    users = []
+    usernames = []
+    raw_users = []
     for line in stdout.decode().strip().splitlines():
         parts = line.split(":")
         if len(parts) < 7:
@@ -44,7 +45,7 @@ async def list_system_users() -> list[dict]:
         username = parts[0]
         if uid < 1000 or username == "nobody":
             continue
-        users.append({
+        raw_users.append({
             "username": username,
             "uid": uid,
             "gid": int(parts[3]),
@@ -52,7 +53,29 @@ async def list_system_users() -> list[dict]:
             "home": parts[5],
             "shell": parts[6],
         })
-    return users
+        usernames.append(username)
+
+    # Batch-query lock status via passwd -S for each user
+    locked_set: set[str] = set()
+    for uname in usernames:
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "passwd", "-S", uname,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await p.communicate()
+            if p.returncode == 0:
+                fields = out.decode().strip().split()
+                if len(fields) >= 2 and fields[1] == "L":
+                    locked_set.add(uname)
+        except Exception:
+            pass
+
+    for u in raw_users:
+        u["locked"] = u["username"] in locked_set
+
+    return raw_users
 
 
 async def create_system_user(username: str, password: str, full_name: str = "") -> None:
@@ -216,3 +239,170 @@ async def remove_user_from_group(username: str, group: str) -> None:
         raise RuntimeError(f"Failed to remove '{username}' from group '{group}': {err}")
 
     logger.info("Removed %s from group %s", username, group)
+
+
+# --- Account management ---
+
+
+async def lock_account(username: str) -> None:
+    """Lock a user account via passwd -l."""
+    proc = await asyncio.create_subprocess_exec(
+        "passwd", "-l", username,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to lock account '{username}': {stderr.decode().strip()}")
+    logger.info("Locked account: %s", username)
+
+
+async def unlock_account(username: str) -> None:
+    """Unlock a user account via passwd -u."""
+    proc = await asyncio.create_subprocess_exec(
+        "passwd", "-u", username,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to unlock account '{username}': {stderr.decode().strip()}")
+    logger.info("Unlocked account: %s", username)
+
+
+async def force_password_change(username: str) -> None:
+    """Force password change on next login via passwd -e."""
+    proc = await asyncio.create_subprocess_exec(
+        "passwd", "-e", username,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to expire password for '{username}': {stderr.decode().strip()}")
+    logger.info("Forced password change for: %s", username)
+
+
+async def set_account_expiration(username: str, expire_date: str = "", max_days: int | None = None) -> None:
+    """Set account expiration date and/or max password age via chage."""
+    if expire_date:
+        proc = await asyncio.create_subprocess_exec(
+            "chage", "-E", expire_date, username,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to set expiration for '{username}': {stderr.decode().strip()}")
+    elif expire_date == "":
+        # Remove expiration
+        proc = await asyncio.create_subprocess_exec(
+            "chage", "-E", "-1", username,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to remove expiration for '{username}': {stderr.decode().strip()}")
+
+    if max_days is not None:
+        proc = await asyncio.create_subprocess_exec(
+            "chage", "-M", str(max_days), username,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to set max password days for '{username}': {stderr.decode().strip()}")
+
+    logger.info("Updated expiration for: %s", username)
+
+
+async def get_account_status(username: str) -> dict:
+    """Get account lock/expiration status."""
+    result: dict = {"locked": False, "expire_date": "", "max_days": None, "last_change": "", "password_expires": ""}
+
+    # passwd -S
+    proc = await asyncio.create_subprocess_exec(
+        "passwd", "-S", username,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode == 0:
+        fields = stdout.decode().strip().split()
+        if len(fields) >= 2:
+            result["locked"] = fields[1] == "L"
+
+    # chage -l
+    proc = await asyncio.create_subprocess_exec(
+        "chage", "-l", username,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode == 0:
+        for line in stdout.decode().strip().splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if "account expires" in key:
+                result["expire_date"] = "" if value == "never" else value
+            elif "maximum number of days" in key:
+                try:
+                    result["max_days"] = int(value)
+                except ValueError:
+                    result["max_days"] = None
+            elif "last password change" in key:
+                result["last_change"] = value
+            elif "password expires" in key:
+                result["password_expires"] = value
+
+    return result
+
+
+async def list_shells() -> list[str]:
+    """Read /etc/shells and return list of valid shells."""
+    shells = []
+    try:
+        with open("/etc/shells") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    shells.append(line)
+    except FileNotFoundError:
+        shells = ["/bin/bash", "/bin/sh"]
+    return shells
+
+
+async def change_shell(username: str, shell: str) -> None:
+    """Change a user's login shell. Validates against /etc/shells."""
+    valid_shells = await list_shells()
+    if shell not in valid_shells:
+        raise ValueError(f"Invalid shell '{shell}'. Must be one of: {', '.join(valid_shells)}")
+
+    proc = await asyncio.create_subprocess_exec(
+        "usermod", "-s", shell, username,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to change shell for '{username}': {stderr.decode().strip()}")
+    logger.info("Changed shell for %s to %s", username, shell)
+
+
+async def rename_group(old_name: str, new_name: str) -> None:
+    """Rename a system group."""
+    _validate_name(new_name, "group name")
+    proc = await asyncio.create_subprocess_exec(
+        "groupmod", "-n", new_name, old_name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed to rename group '{old_name}' to '{new_name}': {stderr.decode().strip()}")
+    logger.info("Renamed group %s to %s", old_name, new_name)

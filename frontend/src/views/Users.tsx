@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   listSystemUsers,
   createSystemUser,
@@ -15,6 +15,11 @@ import {
   changeSmbPassword,
   listSmbShares,
   updateShareAccess,
+  lockAccount,
+  forcePasswordChange,
+  changeShell,
+  listShells,
+  renameGroup,
   type SystemUser,
   type SystemGroup,
   type SmbUser,
@@ -34,8 +39,32 @@ import {
   ChevronRight,
   X,
   Plus,
+  Lock,
+  Unlock,
+  Terminal,
+  Pencil,
 } from "lucide-react";
 import s from "@/styles/views.module.css";
+
+function passwordStrength(pw: string): { score: number; color: string } {
+  let score = 0;
+  if (pw.length >= 8) score++;
+  if (/[A-Z]/.test(pw)) score++;
+  if (/[0-9]/.test(pw)) score++;
+  if (/[^A-Za-z0-9]/.test(pw)) score++;
+  const color = score <= 1 ? "var(--color-danger)" : score <= 2 ? "var(--color-warning)" : "var(--color-success)";
+  return { score, color };
+}
+
+function PasswordStrengthBar({ password }: { password: string }) {
+  if (!password) return null;
+  const { score, color } = passwordStrength(password);
+  return (
+    <div style={{ height: 4, background: "var(--color-border)", borderRadius: 2, marginTop: 4, width: "100%" }}>
+      <div style={{ height: 4, borderRadius: 2, background: color, width: `${(score / 4) * 100}%`, transition: "width 0.2s, background 0.2s" }} />
+    </div>
+  );
+}
 
 export function Users() {
   const { addToast } = useToast();
@@ -50,6 +79,9 @@ export function Users() {
   const [changePwUser, setChangePwUser] = useState<string | null>(null);
   const [changePwValue, setChangePwValue] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [shellEditUser, setShellEditUser] = useState<string | null>(null);
+  const [shellEditValue, setShellEditValue] = useState("");
+  const [availableShells, setAvailableShells] = useState<string[]>([]);
 
   const createUserMutation = useMutation(
     (username: string, password: string, fullName: string) =>
@@ -61,6 +93,20 @@ export function Users() {
   const changePasswordMutation = useMutation(
     (username: string, password: string) => changeSystemPassword(username, password),
   );
+  const lockAccountMutation = useMutation(
+    (username: string, locked: boolean) => lockAccount(username, locked),
+  );
+  const forcePasswordChangeMutation = useMutation(
+    (username: string) => forcePasswordChange(username),
+  );
+  const changeShellMutation = useMutation(
+    (username: string, shell: string) => changeShell(username, shell),
+  );
+
+  // Fetch available shells on mount
+  useEffect(() => {
+    listShells().then(setAvailableShells).catch(() => {});
+  }, []);
 
   // --- Groups ---
   const { data: groups, loading: groupsLoading, refetch: refetchGroups } =
@@ -70,6 +116,8 @@ export function Users() {
   const [deleteGroupConfirm, setDeleteGroupConfirm] = useState<string | null>(null);
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [addMemberUser, setAddMemberUser] = useState("");
+  const [renameGroupName, setRenameGroupName] = useState<string | null>(null);
+  const [renameGroupValue, setRenameGroupValue] = useState("");
 
   const createGroupMutation = useMutation((name: string) => createGroup(name));
   const deleteGroupMutation = useMutation(
@@ -80,6 +128,9 @@ export function Users() {
   );
   const removeFromGroupMutation = useMutation(
     (username: string, group: string) => removeUserFromGroup(username, group),
+  );
+  const renameGroupMutation = useMutation(
+    (name: string, newName: string) => renameGroup(name, newName),
   );
 
   // --- SMB Users ---
@@ -157,6 +208,51 @@ export function Users() {
     } else if (changePasswordMutation.error) {
       addToast("error", changePasswordMutation.error);
     }
+  };
+
+  const handleLockToggle = async (username: string, currentlyLocked: boolean) => {
+    const result = await lockAccountMutation.execute(username, !currentlyLocked);
+    if (result) {
+      addToast("success", `Account '${username}' ${currentlyLocked ? "unlocked" : "locked"}`);
+    } else if (lockAccountMutation.error) {
+      addToast("error", lockAccountMutation.error);
+    }
+    refetchUsers();
+  };
+
+  const handleForcePasswordChange = async (username: string) => {
+    const result = await forcePasswordChangeMutation.execute(username);
+    if (result) {
+      addToast("success", `'${username}' must change password on next login`);
+    } else if (forcePasswordChangeMutation.error) {
+      addToast("error", forcePasswordChangeMutation.error);
+    }
+  };
+
+  const handleChangeShell = async (username: string) => {
+    if (!shellEditValue) return;
+    const result = await changeShellMutation.execute(username, shellEditValue);
+    if (result) {
+      addToast("success", `Shell changed for '${username}'`);
+      setShellEditUser(null);
+      setShellEditValue("");
+    } else if (changeShellMutation.error) {
+      addToast("error", changeShellMutation.error);
+    }
+    refetchUsers();
+  };
+
+  const handleRenameGroup = async (name: string) => {
+    if (!renameGroupValue || renameGroupValue === name) return;
+    const result = await renameGroupMutation.execute(name, renameGroupValue);
+    if (result) {
+      addToast("success", `Group '${name}' renamed to '${renameGroupValue}'`);
+      setRenameGroupName(null);
+      setRenameGroupValue("");
+    } else if (renameGroupMutation.error) {
+      addToast("error", renameGroupMutation.error);
+    }
+    refetchGroups();
   };
 
   const handleCreateGroup = async () => {
@@ -308,6 +404,8 @@ export function Users() {
                 <th style={thStyle}>Full Name</th>
                 <th style={thStyle}>UID</th>
                 <th style={thStyle}>Home</th>
+                <th style={thStyle}>Shell</th>
+                <th style={thStyle}>Status</th>
                 <th style={thStyle}>Actions</th>
               </tr>
             </thead>
@@ -320,18 +418,34 @@ export function Users() {
                   </td>
                   <td className={s.mono} style={tdStyle}>{u.uid}</td>
                   <td className={s.mono} style={tdStyle}>{u.home}</td>
+                  <td className={s.mono} style={{ ...tdStyle, fontSize: "var(--text-xs)" }}>{u.shell}</td>
+                  <td style={tdStyle}>
+                    {u.locked ? (
+                      <span className={s.badgeDanger} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <Lock size={10} /> Locked
+                      </span>
+                    ) : (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--color-success)", display: "inline-block" }} />
+                        Active
+                      </span>
+                    )}
+                  </td>
                   <td style={tdStyle}>
                     <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
                       {changePwUser === u.username ? (
                         <>
-                          <input
-                            className={s.input}
-                            type="password"
-                            placeholder="New password"
-                            value={changePwValue}
-                            onChange={(e) => setChangePwValue(e.target.value)}
-                            style={{ width: 160 }}
-                          />
+                          <div>
+                            <input
+                              className={s.input}
+                              type="password"
+                              placeholder="New password"
+                              value={changePwValue}
+                              onChange={(e) => setChangePwValue(e.target.value)}
+                              style={{ width: 160 }}
+                            />
+                            <PasswordStrengthBar password={changePwValue} />
+                          </div>
                           <button
                             className={s.btnPrimary}
                             onClick={handleChangePassword}
@@ -369,6 +483,34 @@ export function Users() {
                             Cancel
                           </button>
                         </>
+                      ) : shellEditUser === u.username ? (
+                        <>
+                          <select
+                            className={s.select}
+                            value={shellEditValue}
+                            onChange={(e) => setShellEditValue(e.target.value)}
+                            style={{ fontSize: "var(--text-xs)" }}
+                          >
+                            {availableShells.map((sh) => (
+                              <option key={sh} value={sh}>{sh}</option>
+                            ))}
+                          </select>
+                          <button
+                            className={s.btnPrimary}
+                            onClick={() => handleChangeShell(u.username)}
+                            disabled={changeShellMutation.loading || !shellEditValue}
+                            style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
+                          >
+                            {changeShellMutation.loading ? "..." : "Save"}
+                          </button>
+                          <button
+                            className={s.btnGhost}
+                            onClick={() => { setShellEditUser(null); setShellEditValue(""); }}
+                            style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
+                          >
+                            Cancel
+                          </button>
+                        </>
                       ) : (
                         <>
                           <button
@@ -377,6 +519,29 @@ export function Users() {
                             style={{ display: "flex", alignItems: "center", gap: 4 }}
                           >
                             <KeyRound size={12} /> Password
+                          </button>
+                          <button
+                            className={s.btnGhost}
+                            onClick={() => { setShellEditUser(u.username); setShellEditValue(u.shell); }}
+                            style={{ display: "flex", alignItems: "center", gap: 4 }}
+                          >
+                            <Terminal size={12} /> Shell
+                          </button>
+                          <button
+                            className={s.btnGhost}
+                            onClick={() => handleLockToggle(u.username, u.locked)}
+                            disabled={lockAccountMutation.loading}
+                            style={{ display: "flex", alignItems: "center", gap: 4 }}
+                          >
+                            {u.locked ? <><Unlock size={12} /> Unlock</> : <><Lock size={12} /> Lock</>}
+                          </button>
+                          <button
+                            className={s.btnGhost}
+                            onClick={() => handleForcePasswordChange(u.username)}
+                            disabled={forcePasswordChangeMutation.loading}
+                            style={{ display: "flex", alignItems: "center", gap: 4 }}
+                          >
+                            <KeyRound size={12} /> Force PW Change
                           </button>
                           <button
                             className={s.btnDanger}
@@ -427,6 +592,7 @@ export function Users() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
               />
+              <PasswordStrengthBar password={newPassword} />
             </div>
             <div>
               <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
@@ -559,6 +725,31 @@ export function Users() {
                               Cancel
                             </button>
                           </>
+                        ) : renameGroupName === g.name ? (
+                          <>
+                            <input
+                              className={s.input}
+                              value={renameGroupValue}
+                              onChange={(e) => setRenameGroupValue(e.target.value)}
+                              style={{ width: 140, fontSize: "var(--text-xs)" }}
+                              placeholder="New group name"
+                            />
+                            <button
+                              className={s.btnPrimary}
+                              onClick={() => handleRenameGroup(g.name)}
+                              disabled={renameGroupMutation.loading || !renameGroupValue || renameGroupValue === g.name}
+                              style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
+                            >
+                              {renameGroupMutation.loading ? "..." : "Save"}
+                            </button>
+                            <button
+                              className={s.btnGhost}
+                              onClick={() => { setRenameGroupName(null); setRenameGroupValue(""); }}
+                              style={{ padding: "var(--space-1) var(--space-2)", fontSize: "var(--text-xs)" }}
+                            >
+                              Cancel
+                            </button>
+                          </>
                         ) : (
                           <>
                             <button
@@ -571,6 +762,13 @@ export function Users() {
                             >
                               {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                               Members
+                            </button>
+                            <button
+                              className={s.btnGhost}
+                              onClick={() => { setRenameGroupName(g.name); setRenameGroupValue(g.name); }}
+                              style={{ display: "flex", alignItems: "center", gap: 4 }}
+                            >
+                              <Pencil size={12} /> Rename
                             </button>
                             <button
                               className={s.btnDanger}
@@ -670,14 +868,17 @@ export function Users() {
                     <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", flexWrap: "wrap" }}>
                       {smbChangePwUser === u.username ? (
                         <>
-                          <input
-                            className={s.input}
-                            type="password"
-                            placeholder="New password"
-                            value={smbChangePwValue}
-                            onChange={(e) => setSmbChangePwValue(e.target.value)}
-                            style={{ width: 160 }}
-                          />
+                          <div>
+                            <input
+                              className={s.input}
+                              type="password"
+                              placeholder="New password"
+                              value={smbChangePwValue}
+                              onChange={(e) => setSmbChangePwValue(e.target.value)}
+                              style={{ width: 160 }}
+                            />
+                            <PasswordStrengthBar password={smbChangePwValue} />
+                          </div>
                           <button
                             className={s.btnPrimary}
                             onClick={handleChangeSmbPassword}
@@ -752,6 +953,7 @@ export function Users() {
                 value={newSmbPassword}
                 onChange={(e) => setNewSmbPassword(e.target.value)}
               />
+              <PasswordStrengthBar password={newSmbPassword} />
             </div>
             <button
               className={s.btnPrimary}

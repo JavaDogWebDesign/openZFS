@@ -9,6 +9,7 @@ import {
   Plus,
   Share2,
   Trash2,
+  Type,
   X,
 } from "lucide-react";
 import {
@@ -21,6 +22,7 @@ import {
   unmountDataset,
   shareDataset,
   setDatasetProperties,
+  renameDataset,
   type DatasetSummary,
   type PoolSummary,
 } from "@/lib/api";
@@ -121,6 +123,8 @@ export function Datasets() {
   const [shareProtocol, setShareProtocol] = useState<"nfs" | "smb">("nfs");
   const [editingProp, setEditingProp] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [renameTarget, setRenameTarget] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   // --- Data fetching ---
 
@@ -180,6 +184,9 @@ export function Datasets() {
   const setPropMut = useMutation(
     (name: string, prop: string, val: string) =>
       setDatasetProperties(name, { [prop]: val }),
+  );
+  const renameMut = useMutation(
+    (name: string, newName: string) => renameDataset(name, newName),
   );
 
   const { addToast } = useToast();
@@ -280,6 +287,22 @@ export function Datasets() {
     setEditingProp(prop);
     setEditValue(currentValue);
   }, []);
+
+  const handleRename = useCallback(async () => {
+    if (!renameTarget || !renameValue.trim()) return;
+    const result = await renameMut.execute(renameTarget, renameValue.trim());
+    if (result) {
+      addToast("success", `Dataset renamed to ${renameValue.trim()}`);
+      setRenameTarget(null);
+      setRenameValue("");
+      if (selectedDataset === renameTarget) {
+        setSelectedDataset(renameValue.trim());
+      }
+      refetchDatasets();
+    } else if (renameMut.error) {
+      addToast("error", renameMut.error);
+    }
+  }, [renameTarget, renameValue, renameMut, selectedDataset, refetchDatasets, addToast]);
 
   // --- Render helpers ---
 
@@ -785,6 +808,51 @@ export function Datasets() {
                 Share
               </button>
 
+              {renameTarget === selectedDataset ? (
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                  <input
+                    className={styles.select}
+                    style={{ fontSize: "var(--text-sm)", width: 200, boxSizing: "border-box" }}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleRename();
+                      if (e.key === "Escape") { setRenameTarget(null); setRenameValue(""); }
+                    }}
+                    autoFocus
+                    placeholder="new/dataset/name"
+                  />
+                  <button
+                    className={styles.btnPrimary}
+                    style={{ padding: "var(--space-1) var(--space-2)" }}
+                    onClick={handleRename}
+                    disabled={renameMut.loading || !renameValue.trim()}
+                  >
+                    {renameMut.loading ? "..." : "Save"}
+                  </button>
+                  <button
+                    className={styles.btnGhost}
+                    style={{ padding: "var(--space-1) var(--space-2)" }}
+                    onClick={() => { setRenameTarget(null); setRenameValue(""); }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className={styles.btnGhost}
+                  onClick={() => {
+                    if (selectedDataset) {
+                      setRenameTarget(selectedDataset);
+                      setRenameValue(selectedDataset);
+                    }
+                  }}
+                >
+                  <Type size={14} />
+                  Rename
+                </button>
+              )}
+
               <button
                 className={styles.btnDanger}
                 onClick={() => setDestroyTarget(selectedDataset)}
@@ -794,9 +862,9 @@ export function Datasets() {
               </button>
             </div>
 
-            {(mountMut.error || unmountMut.error || setPropMut.error) && (
+            {(mountMut.error || unmountMut.error || setPropMut.error || renameMut.error) && (
               <div className={styles.error} style={{ marginTop: "var(--space-3)" }}>
-                {mountMut.error || unmountMut.error || setPropMut.error}
+                {mountMut.error || unmountMut.error || setPropMut.error || renameMut.error}
               </div>
             )}
           </>
