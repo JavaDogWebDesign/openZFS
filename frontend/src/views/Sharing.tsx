@@ -8,9 +8,12 @@ import {
   addSmbUser,
   removeSmbUser,
   changeSmbPassword,
+  listSmbShares,
+  updateShareAccess,
   type DatasetSummary,
   type SmbOptions as ApiSmbOptions,
   type SmbUser,
+  type SmbShareInfo,
 } from "@/lib/api";
 import { useApi, useMutation } from "@/hooks/useApi";
 import { useToast } from "@/components/Toast";
@@ -126,6 +129,7 @@ export function Sharing() {
   // SMB Users state
   const [newSmbUsername, setNewSmbUsername] = useState("");
   const [newSmbPassword, setNewSmbPassword] = useState("");
+  const [newSmbShares, setNewSmbShares] = useState<string[]>([]);
   const [changePwUser, setChangePwUser] = useState<string | null>(null);
   const [changePwValue, setChangePwValue] = useState("");
 
@@ -165,6 +169,11 @@ export function Sharing() {
   const changeSmbPwMutation = useMutation((username: string, password: string) =>
     changeSmbPassword(username, password),
   );
+
+  const {
+    data: smbShares,
+    refetch: refetchSmbShares,
+  } = useApi(() => listSmbShares(), []);
 
   // Load detailed properties for all datasets
   const loadDetails = useCallback(async () => {
@@ -288,16 +297,33 @@ export function Sharing() {
     refetchDatasets();
     loadDetails();
     refetchSmbUsers();
+    refetchSmbShares();
   };
 
   const handleAddSmbUser = async () => {
     if (!newSmbUsername || !newSmbPassword) return;
     const result = await addSmbUserMutation.execute(newSmbUsername, newSmbPassword);
     if (result) {
-      addToast("success", `SMB user '${newSmbUsername}' added`);
+      // Grant access to selected shares
+      for (const shareName of newSmbShares) {
+        const share = smbShares?.find((sh: SmbShareInfo) => sh.share_name === shareName);
+        const existing = share?.valid_users ?? "";
+        const users = existing ? existing.split(/\s+/) : [];
+        if (!users.includes(newSmbUsername)) {
+          users.push(newSmbUsername);
+        }
+        try {
+          await updateShareAccess(shareName, users.join(" "));
+        } catch {
+          addToast("error", `Failed to grant access to share '${shareName}'`);
+        }
+      }
+      addToast("success", `SMB user '${newSmbUsername}' added${newSmbShares.length ? ` with access to ${newSmbShares.length} share(s)` : ""}`);
       setNewSmbUsername("");
       setNewSmbPassword("");
+      setNewSmbShares([]);
       refetchSmbUsers();
+      refetchSmbShares();
     } else if (addSmbUserMutation.error) {
       addToast("error", addSmbUserMutation.error);
     }
@@ -1070,6 +1096,38 @@ export function Sharing() {
               {addSmbUserMutation.loading ? "Adding..." : "Add User"}
             </button>
           </div>
+          {smbShares && smbShares.length > 0 && (
+            <div style={{ marginTop: "var(--space-3)" }}>
+              <label style={{ display: "block", marginBottom: "var(--space-1)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                Grant access to shares
+              </label>
+              <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
+                {smbShares.map((share: SmbShareInfo) => (
+                  <label
+                    key={share.share_name}
+                    style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", fontSize: "var(--text-sm)", cursor: "pointer" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={newSmbShares.includes(share.share_name)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setNewSmbShares((prev) => [...prev, share.share_name]);
+                        } else {
+                          setNewSmbShares((prev) => prev.filter((n) => n !== share.share_name));
+                        }
+                      }}
+                    />
+                    <span className={s.mono}>{share.share_name}</span>
+                    <span style={{ color: "var(--color-text-dim)", fontSize: "var(--text-xs)" }}>({share.path})</span>
+                  </label>
+                ))}
+              </div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-dim)", marginTop: "var(--space-1)" }}>
+                Leave unchecked to add the user without granting access to any specific share.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
