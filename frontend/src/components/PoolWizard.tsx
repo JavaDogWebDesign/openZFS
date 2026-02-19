@@ -3,6 +3,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Check,
   HardDrive,
   Shield,
@@ -173,6 +174,12 @@ function parseDisk(raw: Record<string, unknown>): DiskEntry {
 /** Return the stable device path (by-id preferred, falls back to /dev/sdX). */
 function stablePath(disk: DiskEntry): string {
   return disk.byId ?? disk.name;
+}
+
+function formatCapacity(bytes: number): string {
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(0)} MiB`;
+  if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  return `${(bytes / 1024 ** 4).toFixed(2)} TiB`;
 }
 
 function redundancyClass(level: TopologyOption["redundancy"]): string {
@@ -419,14 +426,62 @@ function StepDisks({
   );
 }
 
+interface PresetCard {
+  topology: TopologyType;
+  label: string;
+  description: string;
+  icon: typeof Shield;
+  minDisks: number;
+  recommended?: boolean;
+  /** Fraction of raw capacity that is usable (0-1) */
+  usableFraction: (diskCount: number) => number;
+}
+
+const PRESETS: PresetCard[] = [
+  {
+    topology: "stripe",
+    label: "Basic",
+    description: "Maximum storage, no redundancy",
+    icon: ShieldAlert,
+    minDisks: 1,
+    usableFraction: () => 1,
+  },
+  {
+    topology: "mirror",
+    label: "Protected",
+    description: "Protects against 1 disk failure",
+    icon: ShieldCheck,
+    minDisks: 2,
+    recommended: true,
+    usableFraction: (n) => (n > 0 ? 1 / n : 0),
+  },
+  {
+    topology: "raidz2",
+    label: "Maximum Protection",
+    description: "Protects against 2 disk failures",
+    icon: Shield,
+    minDisks: 4,
+    usableFraction: (n) => (n > 2 ? (n - 2) / n : 0),
+  },
+];
+
 function StepTopology({
   state,
   update,
+  diskSizes,
 }: {
   state: WizardState;
   update: (patch: Partial<WizardState>) => void;
+  diskSizes: number[];
 }) {
   const diskCount = state.selectedDisks.length;
+  const [showCustom, setShowCustom] = useState(false);
+
+  // Is current topology one of the presets?
+  const isPreset = PRESETS.some((p) => p.topology === state.topology);
+
+  // Compute total raw size from disk sizes
+  const totalRaw = diskSizes.reduce((sum, s) => sum + s, 0);
 
   return (
     <>
@@ -435,57 +490,118 @@ function StepTopology({
         that fits your needs.
       </div>
 
-      <div className={css.topologyGrid}>
-        {TOPOLOGY_OPTIONS.map((opt) => {
-          const disabled = diskCount < opt.minDisks;
-          const selected = state.topology === opt.value && !disabled;
+      {/* Preset cards */}
+      <div className={css.presetGrid}>
+        {PRESETS.map((preset) => {
+          const disabled = diskCount < preset.minDisks;
+          const selected = state.topology === preset.topology && !disabled;
+          const Icon = preset.icon;
+          const usable = totalRaw * preset.usableFraction(diskCount);
 
-          let className: string;
-          if (disabled) {
-            className = css.topologyOptionDisabled;
-          } else if (selected) {
-            className = css.topologyOptionSelected;
-          } else {
-            className = css.topologyOption;
-          }
+          let cardClass = css.presetCard;
+          if (disabled) cardClass = css.presetCardDisabled;
+          else if (selected) cardClass = css.presetCardSelected;
 
           return (
             <div
-              key={opt.value}
-              className={className}
+              key={preset.topology}
+              className={cardClass}
               onClick={() => {
-                if (!disabled) update({ topology: opt.value });
+                if (!disabled) {
+                  update({ topology: preset.topology });
+                  setShowCustom(false);
+                }
               }}
             >
-              <input
-                type="radio"
-                className={css.topologyRadio}
-                name="topology"
-                checked={selected}
-                disabled={disabled}
-                onChange={() => {
-                  if (!disabled) update({ topology: opt.value });
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-              <div className={css.topologyInfo}>
-                <div className={css.topologyName}>{opt.label}</div>
-                <div className={css.topologyDesc}>{opt.description}</div>
-                <div className={css.topologyMeta}>
-                  <span className={css.tagMinDisks}>
-                    Min {opt.minDisks} disk{opt.minDisks > 1 ? "s" : ""}
-                  </span>
-                  <span
-                    className={`${css.tagRedundancy} ${redundancyClass(opt.redundancy)}`}
-                  >
-                    {redundancyIcon(opt.redundancy)} {opt.redundancyLabel}
-                  </span>
-                </div>
+              <Icon size={24} />
+              <div className={css.presetLabel}>
+                {preset.label}
+                {preset.recommended && (
+                  <span className={css.presetRecommended}>Recommended</span>
+                )}
               </div>
+              <div className={css.presetDesc}>{preset.description}</div>
+              {!disabled && totalRaw > 0 && (
+                <div className={css.presetCapacity}>
+                  ~{formatCapacity(usable)} usable
+                </div>
+              )}
+              {disabled && (
+                <div className={css.presetCapacity}>
+                  Needs {preset.minDisks}+ disks
+                </div>
+              )}
             </div>
           );
         })}
       </div>
+
+      {/* Custom configuration toggle */}
+      <div style={{ marginTop: "var(--space-4)" }}>
+        <button
+          type="button"
+          className={css.btnBack}
+          onClick={() => setShowCustom((o) => !o)}
+          style={{ fontSize: "var(--text-xs)" }}
+        >
+          {showCustom ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          Custom configuration
+        </button>
+      </div>
+
+      {(showCustom || (!isPreset && !PRESETS.some((p) => p.topology === state.topology))) && (
+        <div className={css.topologyGrid} style={{ marginTop: "var(--space-3)" }}>
+          {TOPOLOGY_OPTIONS.map((opt) => {
+            const disabled = diskCount < opt.minDisks;
+            const selected = state.topology === opt.value && !disabled;
+
+            let className: string;
+            if (disabled) {
+              className = css.topologyOptionDisabled;
+            } else if (selected) {
+              className = css.topologyOptionSelected;
+            } else {
+              className = css.topologyOption;
+            }
+
+            return (
+              <div
+                key={opt.value}
+                className={className}
+                onClick={() => {
+                  if (!disabled) update({ topology: opt.value });
+                }}
+              >
+                <input
+                  type="radio"
+                  className={css.topologyRadio}
+                  name="topology"
+                  checked={selected}
+                  disabled={disabled}
+                  onChange={() => {
+                    if (!disabled) update({ topology: opt.value });
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <div className={css.topologyInfo}>
+                  <div className={css.topologyName}>{opt.label}</div>
+                  <div className={css.topologyDesc}>{opt.description}</div>
+                  <div className={css.topologyMeta}>
+                    <span className={css.tagMinDisks}>
+                      Min {opt.minDisks} disk{opt.minDisks > 1 ? "s" : ""}
+                    </span>
+                    <span
+                      className={`${css.tagRedundancy} ${redundancyClass(opt.redundancy)}`}
+                    >
+                      {redundancyIcon(opt.redundancy)} {opt.redundancyLabel}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }
@@ -800,7 +916,7 @@ export function PoolWizard({
       case 1:
         return <StepDisks state={state} update={update} />;
       case 2:
-        return <StepTopology state={state} update={update} />;
+        return <StepTopology state={state} update={update} diskSizes={[]} />;
       case 3:
         return <StepProperties state={state} update={update} />;
       case 4:

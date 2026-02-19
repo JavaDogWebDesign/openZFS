@@ -315,6 +315,8 @@ class SystemUserCreate(BaseModel):
     username: str = Field(..., pattern=r"^[a-z_][a-z0-9_-]{0,31}$")
     password: str = Field(..., min_length=1)
     full_name: str = ""
+    smb_password: str | None = Field(None, description="If set, also create an SMB user with this password")
+    smb_shares: list[str] = Field(default_factory=list, description="Grant SMB access to these shares")
 
 
 class SystemUserDelete(BaseModel):

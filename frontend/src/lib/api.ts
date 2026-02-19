@@ -464,11 +464,19 @@ export function listSystemUsers() {
   return api.get<SystemUser[]>("/api/users");
 }
 
-export function createSystemUser(username: string, password: string, fullName = "") {
-  return api.post<{ message: string }>("/api/users", {
+export function createSystemUser(
+  username: string,
+  password: string,
+  fullName = "",
+  smbPassword?: string,
+  smbShares?: string[],
+) {
+  return api.post<{ message: string; smb_enabled?: boolean; shares_granted?: string[] }>("/api/users", {
     username,
     password,
     full_name: fullName,
+    smb_password: smbPassword ?? null,
+    smb_shares: smbShares ?? [],
   });
 }
 

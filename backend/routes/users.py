@@ -15,7 +15,7 @@ from models import (
     SystemUserCreate,
     SystemUserDelete,
 )
-from services import users
+from services import users, samba
 from db import audit_log
 
 router = APIRouter()
@@ -91,13 +91,49 @@ async def list_system_users(user: dict = Depends(get_current_user)):
 
 @router.post("")
 async def create_system_user(body: SystemUserCreate, user: dict = Depends(get_current_user)):
-    """Create a new system user."""
+    """Create a new system user, optionally with SMB access."""
     try:
         await users.create_system_user(body.username, body.password, body.full_name)
     except (RuntimeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     await audit_log(user["username"], "user.create", body.username)
-    return {"message": f"User '{body.username}' created"}
+
+    smb_enabled = False
+    shares_granted: list[str] = []
+
+    # Optionally create SMB user
+    if body.smb_password:
+        try:
+            await samba.add_user(body.username, body.smb_password)
+            smb_enabled = True
+            await audit_log(user["username"], "smb.user.add", body.username)
+        except (RuntimeError, ValueError) as e:
+            # System user was created; report partial success
+            return {
+                "message": f"User '{body.username}' created but SMB setup failed: {e}",
+                "smb_enabled": False,
+                "shares_granted": [],
+            }
+
+    # Optionally grant share access
+    if smb_enabled and body.smb_shares:
+        for share_name in body.smb_shares:
+            try:
+                share = samba.get_share(share_name)
+                existing = (share or {}).get("valid_users", "")
+                user_list = existing.split() if existing else []
+                if body.username not in user_list:
+                    user_list.append(body.username)
+                await samba.update_share_valid_users(share_name, " ".join(user_list))
+                shares_granted.append(share_name)
+            except Exception:
+                pass  # best-effort per share
+
+    return {
+        "message": f"User '{body.username}' created",
+        "smb_enabled": smb_enabled,
+        "shares_granted": shares_granted,
+    }
 
 
 @router.delete("/{username}")

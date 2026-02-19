@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Database,
   Heart,
   HardDrive,
   Bell,
   RefreshCw,
+  Plus,
+  Share2,
+  UserPlus,
+  CheckCircle2,
+  ChevronRight,
 } from "lucide-react";
-import { listPools, type PoolSummary } from "@/lib/api";
+import { listPools, listSmbShares, listNfsExports, listSystemUsers, type PoolSummary } from "@/lib/api";
 import { useApi } from "@/hooks/useApi";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { IoChart } from "@/components/IoChart";
@@ -33,7 +39,11 @@ function parseCapacity(raw: string): number {
 /* ---------- Component ---------- */
 
 export function Dashboard(): JSX.Element {
+  const navigate = useNavigate();
   const { data: pools, loading, error, refetch } = useApi(() => listPools());
+  const { data: smbShares } = useApi(() => listSmbShares());
+  const { data: nfsExports } = useApi(() => listNfsExports());
+  const { data: systemUsers } = useApi(() => listSystemUsers());
 
   /* Selected pool for IoChart (defaults to first pool) */
   const [selectedPool, setSelectedPool] = useState<string>("");
@@ -79,6 +89,17 @@ export function Dashboard(): JSX.Element {
     return `${Math.round(total / pools.length)}%`;
   }, [pools]);
 
+  /* -- Setup steps -- */
+  const hasPool = (pools?.length ?? 0) > 0;
+  const hasShare = (smbShares?.length ?? 0) > 0 || (nfsExports?.length ?? 0) > 0;
+  const hasUsers = (systemUsers?.length ?? 0) > 0;
+  const setupSteps = [
+    { key: "pool", done: hasPool, title: "Create a Storage Pool", desc: "Combine your drives into a redundant storage pool", icon: Database, link: "/pools" },
+    { key: "share", done: hasShare, title: "Share a Folder", desc: "Create an SMB or NFS share for network access", icon: Share2, link: "/datasets" },
+    { key: "user", done: hasUsers, title: "Add Users", desc: "Create user accounts for file sharing access", icon: UserPlus, link: "/users" },
+  ];
+  const setupIncomplete = setupSteps.some((s) => !s.done);
+
   /* ---------- Render ---------- */
 
   if (loading) {
@@ -106,6 +127,79 @@ export function Dashboard(): JSX.Element {
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
+      </div>
+
+      {/* Setup Guide */}
+      {setupIncomplete && (
+        <div className={css.card} style={{ marginBottom: "var(--space-4)" }}>
+          <h2 className={css.cardTitle}>Get Started</h2>
+          <div className={css.grid3}>
+            {setupSteps.map((step) => (
+              <div
+                key={step.key}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "var(--space-2)",
+                  padding: "var(--space-3)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: "var(--radius-md)",
+                  background: step.done ? "var(--color-success-dim)" : "var(--color-bg-surface)",
+                  opacity: step.done ? 0.7 : 1,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                  {step.done ? (
+                    <CheckCircle2 size={16} style={{ color: "var(--color-success)" }} />
+                  ) : (
+                    <step.icon size={16} style={{ color: "var(--color-accent)" }} />
+                  )}
+                  <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>{step.title}</span>
+                </div>
+                <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>{step.desc}</span>
+                {!step.done && (
+                  <button
+                    className={css.btnPrimary}
+                    style={{ alignSelf: "flex-start", marginTop: "var(--space-1)", fontSize: "var(--text-xs)", padding: "var(--space-1) var(--space-3)" }}
+                    onClick={() => navigate(step.link)}
+                  >
+                    Go <ChevronRight size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Quick Actions */}
+      <div className={css.grid3} style={{ marginBottom: "var(--space-4)" }}>
+        {[
+          { label: "New Pool", icon: Plus, link: "/pools" },
+          { label: "New Share", icon: Share2, link: "/datasets" },
+          { label: "Add User", icon: UserPlus, link: "/users" },
+        ].map((action) => (
+          <button
+            key={action.label}
+            className={css.card}
+            style={{
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-3)",
+              fontSize: "var(--text-sm)",
+              fontWeight: 600,
+              border: "1px solid var(--color-border)",
+              transition: "border-color 0.15s",
+            }}
+            onClick={() => navigate(action.link)}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--color-accent)")}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--color-border)")}
+          >
+            <action.icon size={18} style={{ color: "var(--color-accent)" }} />
+            {action.label}
+          </button>
+        ))}
       </div>
 
       {/* Summary stat cards */}
