@@ -364,11 +364,11 @@ async def share_dataset(name: str, body: ShareRequest, user: dict = Depends(get_
         props = await zfs.get_properties(name)
         mountpoint = props.get("mountpoint", {}).get("value", f"/{name}")
 
-    # Make the mount point writable by authenticated users (0775).
+    # Make the mount point writable by all authenticated users (0777).
     # Without this, the root-owned default ZFS mount prevents users from
-    # creating files even though Samba/NFS authenticates them.
+    # creating files. Samba/NFS handle access control at the service level.
     if os.path.isdir(mountpoint):
-        os.chmod(mountpoint, stat.S_IRWXU | stat.S_IRWXG | stat.S_IROTH | stat.S_IXOTH)  # 0o775
+        os.chmod(mountpoint, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)  # 0o777
 
     await audit_log(user["username"], "dataset.share", name, detail=body.protocol)
     return {"message": f"Dataset {name} shared via {body.protocol}"}
