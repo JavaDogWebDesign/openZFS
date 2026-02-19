@@ -209,13 +209,28 @@ async def get_smb_config(name: str, user: dict = Depends(get_current_user)):
 @router.get("/smb-users")
 async def list_smb_users(user: dict = Depends(get_current_user)):
     """List all Samba users."""
-    return await samba.list_users()
+    try:
+        return await samba.list_users()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/smb-users")
 async def add_smb_user(body: SmbUserCreate, user: dict = Depends(get_current_user)):
     """Add a Samba user. The user must already exist as a system user."""
-    await samba.add_user(body.username, body.password)
+    try:
+        await samba.add_user(body.username, body.password)
+    except RuntimeError as e:
+        msg = str(e)
+        # smbpasswd -a fails if the system user doesn't exist
+        if "Failed to add entry" in msg:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to add SMB user '{body.username}'. "
+                       f"The user must exist as a system user first. "
+                       f"Create it with: useradd {body.username}",
+            )
+        raise HTTPException(status_code=400, detail=msg)
     await audit_log(user["username"], "smb.user.add", body.username)
     return {"message": f"Samba user '{body.username}' added"}
 
@@ -223,7 +238,10 @@ async def add_smb_user(body: SmbUserCreate, user: dict = Depends(get_current_use
 @router.delete("/smb-users/{username}")
 async def remove_smb_user(username: str, user: dict = Depends(get_current_user)):
     """Remove a Samba user."""
-    await samba.remove_user(username)
+    try:
+        await samba.remove_user(username)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     await audit_log(user["username"], "smb.user.remove", username)
     return {"message": f"Samba user '{username}' removed"}
 
@@ -235,7 +253,10 @@ async def change_smb_password(
     user: dict = Depends(get_current_user),
 ):
     """Change a Samba user's password."""
-    await samba.change_password(username, body.password)
+    try:
+        await samba.change_password(username, body.password)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     await audit_log(user["username"], "smb.user.password", username)
     return {"message": f"Password changed for Samba user '{username}'"}
 
