@@ -13,6 +13,44 @@ USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 # Groups to always show even if GID < 1000
 SPECIAL_GROUPS = {"sambashare", "sudo", "docker"}
 
+# Password hash prefixes that indicate a real (non-empty) hashed password
+_HASH_PREFIXES = ("$1$", "$2", "$5$", "$6$", "$y$")
+
+
+async def _get_locked_users(usernames: list[str]) -> set[str]:
+    """Determine which users are explicitly locked via shadow hash inspection.
+
+    An account is 'locked' only when its shadow hash is '!' followed by a real
+    password hash (e.g. '!$6$...').  Hashes like '!!', '!', '*', or empty mean
+    'no password set' — not 'locked'.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "getent", "shadow",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return set()
+
+    shadow_map: dict[str, str] = {}
+    for line in stdout.decode().strip().splitlines():
+        parts = line.split(":")
+        if len(parts) >= 2:
+            shadow_map[parts[0]] = parts[1]
+
+    locked: set[str] = set()
+    target = set(usernames)
+    for uname, pw_hash in shadow_map.items():
+        if uname not in target:
+            continue
+        # Locked = hash starts with '!' and has a real hash underneath
+        if pw_hash.startswith("!") and any(
+            pw_hash[1:].startswith(p) for p in _HASH_PREFIXES
+        ):
+            locked.add(uname)
+    return locked
+
 
 def _validate_name(name: str, kind: str = "username") -> None:
     """Validate a username or group name."""
@@ -55,22 +93,8 @@ async def list_system_users() -> list[dict]:
         })
         usernames.append(username)
 
-    # Batch-query lock status via passwd -S for each user
-    locked_set: set[str] = set()
-    for uname in usernames:
-        try:
-            p = await asyncio.create_subprocess_exec(
-                "passwd", "-S", uname,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            out, _ = await p.communicate()
-            if p.returncode == 0:
-                fields = out.decode().strip().split()
-                if len(fields) >= 2 and fields[1] == "L":
-                    locked_set.add(uname)
-        except Exception:
-            pass
+    # Determine lock status via shadow hash inspection
+    locked_set = await _get_locked_users(usernames)
 
     for u in raw_users:
         u["locked"] = u["username"] in locked_set
@@ -326,17 +350,9 @@ async def get_account_status(username: str) -> dict:
     """Get account lock/expiration status."""
     result: dict = {"locked": False, "expire_date": "", "max_days": None, "last_change": "", "password_expires": ""}
 
-    # passwd -S
-    proc = await asyncio.create_subprocess_exec(
-        "passwd", "-S", username,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode == 0:
-        fields = stdout.decode().strip().split()
-        if len(fields) >= 2:
-            result["locked"] = fields[1] == "L"
+    # Shadow hash inspection for lock status
+    locked_set = await _get_locked_users([username])
+    result["locked"] = username in locked_set
 
     # chage -l
     proc = await asyncio.create_subprocess_exec(
