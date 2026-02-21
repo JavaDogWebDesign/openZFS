@@ -41,9 +41,14 @@ async def ensure_include() -> None:
     logger.info("Added include directive to %s", SAMBA_CONF)
 
 
-def _read_config() -> configparser.ConfigParser:
-    """Read the ZFS Manager shares config file."""
-    cp = configparser.ConfigParser()
+def _read_config() -> configparser.RawConfigParser:
+    """Read the ZFS Manager shares config file.
+
+    Uses ``RawConfigParser`` with ``delimiters=("=",)`` so that Samba
+    directives containing colons (e.g. ``fruit:metadata = stream``) are
+    not mis-parsed as duplicate keys.
+    """
+    cp = configparser.RawConfigParser(delimiters=("=",), strict=False)
     if INCLUDE_CONF.exists():
         cp.read(str(INCLUDE_CONF))
     return cp
