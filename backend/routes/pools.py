@@ -142,10 +142,33 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
     from ws import stop_pool_streams
     await stop_pool_streams(pool)
 
+    # 2. Remove SMB shares for all datasets in this pool and force-
+    #    disconnect active Samba clients.  Without this, smbd keeps file
+    #    handles open on the mount points and zpool destroy fails with
+    #    "pool is busy".
+    try:
+        from services.samba import remove_shares_for_pool
+        removed = await remove_shares_for_pool(pool)
+        if removed:
+            logger.info("[destroy %s] Removed SMB shares: %s", pool, removed)
+    except Exception as e:
+        logger.warning("[destroy %s] SMB cleanup failed (continuing): %s", pool, e)
+
+    # 3. Kill any remaining processes using the pool's mount points.
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "fuser", "-km", f"/{pool}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+    except FileNotFoundError:
+        pass  # fuser not installed
+
     # Brief pause for killed processes to fully exit
     await asyncio.sleep(0.5)
 
-    # 2. Destroy with retries
+    # 4. Destroy with retries
     last_err = None
     for attempt in range(3):
         if attempt > 0:
@@ -153,6 +176,15 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
             await asyncio.sleep(2)
             # Re-kill in case anything respawned
             await stop_pool_streams(pool)
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    "fuser", "-km", f"/{pool}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await p.communicate()
+            except FileNotFoundError:
+                pass
             await asyncio.sleep(0.5)
 
         try:

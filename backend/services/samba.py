@@ -193,6 +193,44 @@ def list_shares() -> list[dict]:
     return [_read_share_section(cp, section) for section in cp.sections()]
 
 
+async def remove_shares_for_pool(pool: str) -> list[str]:
+    """Remove all managed SMB shares whose path is under *pool*'s mount tree.
+
+    Also force-disconnects active Samba clients from those shares so that
+    ``smbd`` releases its file handles before we destroy the pool.
+
+    Returns the list of removed share names.
+    """
+    cp = _read_config()
+    prefix = f"/{pool}" if pool.startswith("/") else f"/{pool}/"
+    pool_root = f"/{pool}"
+
+    removed: list[str] = []
+    for section in list(cp.sections()):
+        path = cp.get(section, "path", fallback="")
+        # Match paths like /tank3, /tank3/child, but not /tank33
+        if path == pool_root or path.startswith(prefix):
+            # Force-disconnect clients before removing the config
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "smbcontrol", "smbd", "close-share", section,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+            except FileNotFoundError:
+                pass  # smbcontrol not installed
+            cp.remove_section(section)
+            removed.append(section)
+
+    if removed:
+        _write_config(cp)
+        await _reload_smbd()
+        logger.info("Removed %d SMB share(s) for pool %s: %s", len(removed), pool, removed)
+
+    return removed
+
+
 # --- Samba user management ---
 
 
