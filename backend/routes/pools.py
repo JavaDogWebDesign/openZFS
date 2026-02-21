@@ -155,31 +155,15 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
         logger.warning("[destroy %s] SMB cleanup failed (continuing): %s", pool, e)
 
     # 3. Kill any remaining processes using the pool's mount points.
-    #    Each ZFS dataset is a separate mount, so we must fuser each one.
     try:
-        mnt_proc = await asyncio.create_subprocess_exec(
-            "zfs", "list", "-Hp", "-o", "mountpoint", "-r", pool,
+        proc = await asyncio.create_subprocess_exec(
+            "fuser", "-km", f"/{pool}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        mnt_out, _ = await mnt_proc.communicate()
-        mountpoints = [
-            m for m in mnt_out.decode().strip().splitlines()
-            if m and m != "-" and m != "none" and m != "legacy"
-        ]
-    except Exception:
-        mountpoints = [f"/{pool}"]
-
-    for mnt in mountpoints:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "fuser", "-km", mnt,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-        except FileNotFoundError:
-            break  # fuser not installed, skip all
+        await proc.communicate()
+    except FileNotFoundError:
+        pass  # fuser not installed
 
     # Brief pause for killed processes to fully exit
     await asyncio.sleep(0.5)
@@ -192,16 +176,15 @@ async def destroy_pool(pool: str, body: PoolDestroyRequest, user: dict = Depends
             await asyncio.sleep(2)
             # Re-kill in case anything respawned
             await stop_pool_streams(pool)
-            for mnt in mountpoints:
-                try:
-                    p = await asyncio.create_subprocess_exec(
-                        "fuser", "-km", mnt,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    await p.communicate()
-                except FileNotFoundError:
-                    break
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    "fuser", "-km", f"/{pool}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await p.communicate()
+            except FileNotFoundError:
+                pass
             await asyncio.sleep(0.5)
 
         try:
